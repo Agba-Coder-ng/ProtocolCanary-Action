@@ -689,6 +689,132 @@ describe("ensureCanaryInstalled", () => {
       expect(savedPath).toBe(path.join(tempCargoHome, "bin", "stellar-canary"));
     }
   });
+
+  // #354: Test binary cache restoration, cache misses, executable permissions,
+  // and corrupted/empty cache fallback
+  describe("cache restoration and fallback (#354)", () => {
+    it("restores a binary from cache when cache hit occurs", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockResolvedValue("cache-hit-key");
+
+      const installed = await ensureCanaryInstalled(RESOLVED);
+
+      expect(installed.version).toBe("0.1.0");
+      expect(cacheMocks.restoreCacheMock).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.saveCacheMock).not.toHaveBeenCalled();
+      expect(coreMocks.infoMock).toHaveBeenCalledWith(expect.stringContaining("Restored stellar-canary"));
+    });
+
+    it("falls back to cargo install on cache miss", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockResolvedValue(undefined);
+
+      const installed = await ensureCanaryInstalled(RESOLVED);
+
+      expect(installed.version).toBe("0.1.0");
+      expect(cacheMocks.restoreCacheMock).toHaveBeenCalledTimes(1);
+      expect(cacheMocks.saveCacheMock).toHaveBeenCalledTimes(1);
+      expect(spawnMock).toHaveBeenCalled();
+    });
+
+    it("falls back to cargo install when restored binary is not executable", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockResolvedValue("cache-hit-key");
+      // firstVersionProbeReturns: result for the version check after cache restore
+      // The cached binary exists but is not executable, so the probe throws
+      let probeCallCount = 0;
+      execMock.mockImplementation(
+        async (command: string, args: string[] = [], options: ExecCallOptions = {}): Promise<number> => {
+          execCalls.push({ command, args: [...args], options });
+
+          if (command === "cargo" && args[0] === "--version") {
+            return 0;
+          }
+
+          probeCallCount++;
+          if (probeCallCount === 1) {
+            // First probe (cached binary) throws - not executable
+            throw new Error("ENOENT");
+          }
+          // Second probe (after fresh install) succeeds
+          options.listeners?.stdout?.(Buffer.from(`stellar-canary 0.1.0\n`));
+          return 0;
+        },
+      );
+
+      const installed = await ensureCanaryInstalled(RESOLVED);
+
+      expect(installed.version).toBe("0.1.0");
+      expect(spawnMock).toHaveBeenCalled();
+      expect(cacheMocks.saveCacheMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to cargo install when restored binary is corrupted (empty)", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockResolvedValue("cache-hit-key");
+      // The cached binary exists but is corrupted (empty), so version probe
+      // returns non-zero exit code, then after install it succeeds.
+      let probeCallCount = 0;
+      execMock.mockImplementation(
+        async (command: string, args: string[] = [], options: ExecCallOptions = {}): Promise<number> => {
+          execCalls.push({ command, args: [...args], options });
+
+          if (command === "cargo" && args[0] === "--version") {
+            return 0;
+          }
+
+          probeCallCount++;
+          if (probeCallCount === 1) {
+            // First probe (cached binary) returns non-zero - corrupted
+            options.listeners?.stdout?.(Buffer.from(""));
+            return 1;
+          }
+          // Second probe (after fresh install) succeeds
+          options.listeners?.stdout?.(Buffer.from(`stellar-canary 0.1.0\n`));
+          return 0;
+        },
+      );
+
+      const installed = await ensureCanaryInstalled(RESOLVED);
+
+      expect(installed.version).toBe("0.1.0");
+      expect(spawnMock).toHaveBeenCalled();
+      expect(cacheMocks.saveCacheMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to cargo install when cache restore throws", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockRejectedValue(new Error("cache restore failed"));
+
+      const installed = await ensureCanaryInstalled(RESOLVED);
+
+      expect(installed.version).toBe("0.1.0");
+      expect(coreMocks.debugMock).toHaveBeenCalledWith(expect.stringContaining("Cache restore failed"));
+      expect(spawnMock).toHaveBeenCalled();
+    });
+
+    it("verifies checksum after restoring from cache", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockResolvedValue("cache-hit-key");
+      fs.writeFileSync(binaryPath(), "binary");
+      mockPublishedChecksums(`${sha256(binaryPath())}  stellar-canary\n`);
+
+      const installed = await ensureCanaryInstalled(RESOLVED);
+
+      expect(installed.version).toBe("0.1.0");
+      expect(httpsGetMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects corrupted cached binary that fails checksum verification", async () => {
+      cacheMocks.isFeatureAvailableMock.mockReturnValue(true);
+      cacheMocks.restoreCacheMock.mockResolvedValue("cache-hit-key");
+      fs.writeFileSync(binaryPath(), "tampered-binary");
+      mockPublishedChecksums(`${"a".repeat(64)}  stellar-canary\n`);
+
+      await expect(ensureCanaryInstalled(RESOLVED)).rejects.toThrow(InstallationFailedError);
+      expect(coreMocks.debugMock).not.toHaveBeenCalledWith(expect.stringContaining("Cache restore failed"));
+    });
+  });
 });
 
 describe("ensureCanaryInstalled install timeout (issue #65)", () => {
