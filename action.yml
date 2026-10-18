@@ -154,6 +154,14 @@ outputs:
     description: Number of checks that failed a compatibility assertion.
   errors:
     description: Number of checks that could not complete due to an execution error.
+  replayed-count:
+    description: >-
+      Number of checks whose results were replayed from Protocol Canary's
+      result cache instead of executed in this run (a result with
+      `source: "cache"`, or an equivalent replayed/cached flag). Counts
+      results carrying any replayed marker; engines whose reports predate
+      the cache produce `0`. Explicitly set to `0` on an execution failure,
+      like the other counts.
   report:
     description: >-
       Absolute path to the generated JSON report file. Only set when Canary
