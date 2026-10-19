@@ -198,7 +198,7 @@ describe("test-fork-boundary workflow (#369)", () => {
     const script = extractRunScript(workflowSource(), "fork-boundary-audit");
     const bad = fixtureWorkflow(
       "bad-secrets.yml",
-      `${CLEAN_WORKFLOW}\n      DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}\n`,
+      `${CLEAN_WORKFLOW}\n      DEPLOY_KEY: \${{ secrets.DEPLOY_KEY }}\n`,
     );
     const result = runScript(script, { TARGET_WORKFLOW: bad });
     expect(result.status).not.toBe(0);
@@ -207,7 +207,7 @@ describe("test-fork-boundary workflow (#369)", () => {
     // The declared github-token bridge is explicitly allowed.
     const ok = fixtureWorkflow(
       "ok-secrets.yml",
-      `${CLEAN_WORKFLOW}\n      TOKEN_IN: ${{ secrets.github-token }}\n      RUN_TOKEN: ${{ github.token }}\n`,
+      `${CLEAN_WORKFLOW}\n      TOKEN_IN: \${{ secrets.github-token }}\n      RUN_TOKEN: \${{ github.token }}\n`,
     );
     const okResult = runScript(script, { TARGET_WORKFLOW: ok });
     expect(okResult.stdout + okResult.stderr).not.toContain("::error::");

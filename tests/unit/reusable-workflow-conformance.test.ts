@@ -158,7 +158,7 @@ function reportZipFixture(): string {
     "z=zipfile.ZipFile(sys.argv[1],'w')",
     "z.write(sys.argv[2], arcname='report.json')",
     "z.close()",
-  ].join("; "), args: [zipPath, reportPath], encoding: "utf8"]);
+  ].join("; "), zipPath, reportPath], { encoding: "utf8" });
   if ((res.status ?? 1) !== 0) {
     throw new Error(`fixture zip creation failed: ${res.stderr}`);
   }
@@ -267,7 +267,6 @@ describe("test-reusable-workflow conformance (#370)", () => {
   it("verify-outputs accepts a documented-conformant successful run", () => {
     const script = extractRunScript(workflowSource(), "verify-outputs");
     const zip = reportZipFixture();
-    const dir = fakeCurlDir({ list: VALID_LIST, zip });
     // Stage the unpacked artifact the fetch step would have produced.
     const work = fs.mkdtempSync(path.join(os.tmpdir(), "l75-verify-"));
     const unpacked = path.join(work, "unpacked");
