@@ -23,10 +23,30 @@ export interface ActionInputs {
   /** Protocol version the fixture pack is pinned to, as a positive integer.
    * Validated for format only — see {@link parseFixturesPackProtocol}. */
   readonly fixturesPackProtocol: number | undefined;
+  /** GitHub token for authenticating read-only API calls (tag and checksum lookups). */
+  readonly githubToken: string | undefined;
 }
 
 const SEMVER_LIKE = /^\d+\.\d+\.\d+$/;
 const PROTOCOL_LIKE = /^\d+$/;
+
+/**
+ * Resolves the GitHub token to use for GitHub API requests according to the precedence rules:
+ * 1. Non-empty (after trimming) explicit token / action input value wins.
+ * 2. Otherwise a non-empty `GITHUB_TOKEN` environment variable.
+ * 3. Otherwise `undefined` (unauthenticated). Whitespace-only values count as empty.
+ */
+export function resolveGithubToken(explicitToken?: string): string | undefined {
+  const inputCandidate = explicitToken?.trim();
+  if (inputCandidate !== undefined && inputCandidate !== "") {
+    return inputCandidate;
+  }
+  const envCandidate = process.env.GITHUB_TOKEN?.trim();
+  if (envCandidate !== undefined && envCandidate !== "") {
+    return envCandidate;
+  }
+  return undefined;
+}
 
 /**
  * A fixture-pack release tag: semver-shaped, with an optional leading `v` and
@@ -55,6 +75,11 @@ export function getInputs(): ActionInputs {
   const allowEmpty = parseBoolean("allow-empty", core.getInput("allow-empty") || "false");
   const fixturesPackVersion = parseFixturesPackVersion(core.getInput("fixtures-pack-version"));
   const fixturesPackProtocol = parseFixturesPackProtocol(core.getInput("fixtures-pack-protocol"));
+  const githubToken = resolveGithubToken(core.getInput("github-token"));
+
+  if (githubToken !== undefined) {
+    core.setSecret(githubToken);
+  }
 
   // A validated input that silently does nothing is worse than a missing one:
   // it reads as "my pack is pinned" when the run used whatever
@@ -82,6 +107,7 @@ export function getInputs(): ActionInputs {
     allowEmpty,
     fixturesPackVersion,
     fixturesPackProtocol,
+    githubToken,
   };
 }
 
