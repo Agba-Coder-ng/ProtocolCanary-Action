@@ -298,7 +298,12 @@ describe("run", () => {
 
     // The success-path summary rendering was attempted exactly once, and a
     // passing report emits no annotations.
-    expect(renderSummaryMarkdownMock).toHaveBeenCalledWith(PASS_REPORT);
+    // renderSummaryMarkdown now takes (report, engineArgs, engineVersion)
+    expect(renderSummaryMarkdownMock).toHaveBeenCalledWith(
+      PASS_REPORT,
+      ["check", "--format", "json", "--protocol", "28", "--network", "testnet", "--fixtures-dir", "fixtures"],
+      "0.1.0",
+    );
     expect(writeSummaryMock).toHaveBeenCalledTimes(1);
     expect(errorMock).not.toHaveBeenCalled();
     expect(warningMock).not.toHaveBeenCalled();

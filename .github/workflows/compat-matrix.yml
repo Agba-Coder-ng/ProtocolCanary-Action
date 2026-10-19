@@ -1,0 +1,272 @@
+name: Compatibility Matrix
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Weekly on Monday at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      engine-refs:
+        description: "Engine refs to test (comma-separated, e.g. v0.1.1,v0.2.0)"
+        required: false
+        default: "v0.1.1,v0.2.0"
+      pack-refs:
+        description: "Fixture pack refs to test (comma-separated, e.g. protocol-28,main)"
+        required: false
+        default: "protocol-28,main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compat-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  matrix:
+    name: Compatibility Matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        engine-ref: ${{ fromJson(format('["{0}"]', github.event.inputs.engine-refs || 'v0.1.1,v0.2.0')) }}
+        pack-ref: ${{ fromJson(format('["{0}"]', github.event.inputs.pack-refs || 'protocol-28,main')) }}
+    steps:
+      - name: Checkout ProtocolCanary-Action
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout Protocol-Canary engine
+        uses: actions/checkout@v4
+        with:
+          repository: StellarCanary/Protocol-Canary
+          ref: ${{ matrix.engine-ref }}
+          path: engine
+          persist-credentials: false
+
+      - name: Checkout ProtocolCanary-Fixtures
+        uses: actions/checkout@v4
+        with:
+          repository: StellarCanary/ProtocolCanary-Fixtures
+          ref: ${{ matrix.pack-ref }}
+          path: fixtures
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustc, cargo
+
+      - name: Cache engine build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: engine-${{ matrix.engine-ref }}-${{ runner.os }}-${{ runner.arch }}
+          restore-keys: |
+            engine-${{ matrix.engine-ref }}-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build engine
+        id: build-engine
+        run: |
+          cd engine
+          cargo install --locked --path canary-cli --root ~/.cargo
+          echo "binary=~/.cargo/bin/stellar-canary" >> $GITHUB_OUTPUT
+
+      - name: Run compatibility check
+        id: canary
+        continue-on-error: true
+        env:
+          STELLAR_CANARY_BINARY: ${{ steps.build-engine.outputs.binary }}
+        run: |
+          binary="${STELLAR_CANARY_BINARY}"
+          protocol=28
+          fixtures_dir="fixtures"
+          output_file="${RUNNER_TEMP}/report.json"
+
+          # Run the engine
+          set +e
+          "$binary" check \
+            --protocol "$protocol" \
+            --fixtures-dir "$fixtures_dir" \
+            --format json \
+            > "$output_file" 2>"${RUNNER_TEMP}/stderr.txt"
+          exit_code=$?
+          set -e
+
+          # Capture outputs
+          stdout=$(cat "$output_file" 2>/dev/null || echo "")
+          stderr=$(cat "${RUNNER_TEMP}/stderr.txt" 2>/dev/null || echo "")
+
+          # Determine status from exit code
+          if [ $exit_code -eq 0 ]; then
+            status="pass"
+          elif [ $exit_code -eq 1 ]; then
+            status="fail"
+          elif [ $exit_code -eq 2 ]; then
+            status="error"
+          elif [ $exit_code -eq 3 ]; then
+            status="execution-failed"
+          else
+            status="execution-failed"
+          fi
+
+          # Parse counts from JSON report
+          if [ -s "$output_file" ]; then
+            passed=$(echo "$stdout" | jq -r '.counts.passed // 0' 2>/dev/null || echo 0)
+            failed=$(echo "$stdout" | jq -r '.counts.failed // 0' 2>/dev/null || echo 0)
+            warnings=$(echo "$stdout" | jq -r '.counts.warnings // 0' 2>/dev/null || echo 0)
+            errors=$(echo "$stdout" | jq -r '.counts.errors // 0' 2>/dev/null || echo 0)
+            total=$(echo "$stdout" | jq -r '.counts.total // 0' 2>/dev/null || echo 0)
+            replayed=$(echo "$stdout" | jq -r '.counts.replayed // 0' 2>/dev/null || echo 0)
+          else
+            passed=0
+            failed=0
+            warnings=0
+            errors=0
+            total=0
+            replayed=0
+          fi
+
+          # First diagnostic line
+          first_diagnostic=$(echo "$stderr" | head -n1 | sed 's/|/%7C/g' | sed 's/"/%22/g')
+
+          # Output for classification
+          echo "status=$status" >> $GITHUB_OUTPUT
+          echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
+          echo "passed=$passed" >> $GITHUB_OUTPUT
+          echo "failures=$failed" >> $GITHUB_OUTPUT
+          echo "warnings=$warnings" >> $GITHUB_OUTPUT
+          echo "errors=$errors" >> $GITHUB_OUTPUT
+          echo "total=$total" >> $GITHUB_OUTPUT
+          echo "replayed=$replayed" >> $GITHUB_OUTPUT
+          echo "first_diagnostic=$first_diagnostic" >> $GITHUB_OUTPUT
+          echo "ran_no_checks=$([ "$total" -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      - name: Prepare cell facts
+        id: facts
+        run: |
+          # Determine build outcome
+          if [ "${{ steps.build-engine.outcome }}" = "success" ]; then
+            build_outcome="success"
+          elif [ "${{ steps.build-engine.outcome }}" = "failure" ]; then
+            build_outcome="failure"
+          elif [ "${{ steps.build-engine.outcome }}" = "cancelled" ]; then
+            build_outcome="cancelled"
+          else
+            build_outcome="failure"
+          fi
+
+          # If build failed, canary step won't have run
+          if [ "$build_outcome" != "success" ]; then
+            echo "status=" >> $GITHUB_OUTPUT
+            echo "passed=0" >> $GITHUB_OUTPUT
+            echo "failures=0" >> $GITHUB_OUTPUT
+            echo "warnings=0" >> $GITHUB_OUTPUT
+            echo "errors=0" >> $GITHUB_OUTPUT
+            echo "total=0" >> $GITHUB_OUTPUT
+            echo "first_diagnostic=" >> $GITHUB_OUTPUT
+            echo "ran_no_checks=true" >> $GITHUB_OUTPUT
+          fi
+
+          echo "engine_ref=${{ matrix.engine-ref }}" >> $GITHUB_OUTPUT
+          echo "pack_ref=${{ matrix.pack-ref }}" >> $GITHUB_OUTPUT
+          echo "action_commit=${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_OUTPUT
+          echo "build_outcome=$build_outcome" >> $GITHUB_OUTPUT
+
+      - name: Upload cell facts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cell-facts-${{ matrix.engine-ref }}-${{ matrix.pack-ref }}
+          path: |
+            ${{ runner.temp }}/report.json
+            ${{ runner.temp }}/stderr.txt
+          if-no-files-found: ignore
+
+  collect:
+    name: Collect and Classify Results
+    runs-on: ubuntu-latest
+    needs: matrix
+    timeout-minutes: 10
+    steps:
+      - name: Checkout ProtocolCanary-Action
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download all cell facts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cell-facts-*
+          path: cell-facts
+          merge-multiple: false
+
+      - name: Load expectations
+        id: expectations
+        run: |
+          if [ -f docs/compat-expectations.json ]; then
+            cat docs/compat-expectations.json
+          else
+            echo "[]"
+          fi > expectations.json
+          echo "expectations=$(cat expectations.json | jq -c .)" >> $GITHUB_OUTPUT
+
+      - name: Classify cells
+        id: classify
+        run: |
+          node << 'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          const { classifyCell, shouldFailJob, formatResultsTable } = require('./scripts/classify-compat.mjs');
+
+          const expectations = JSON.parse(process.env.EXPECTATIONS);
+          const cells = [];
+
+          // Read all cell facts from artifacts
+          const factsDir = 'cell-facts';
+          if (fs.existsSync(factsDir)) {
+            for (const dir of fs.readdirSync(factsDir)) {
+              const factPath = path.join(factsDir, dir, 'cell-facts.json');
+              if (!fs.existsSync(factPath)) continue;
+
+              const facts = JSON.parse(fs.readFileSync(factPath, 'utf8'));
+              const classified = classifyCell(facts, expectations);
+              cells.push(classified);
+            }
+          }
+
+          // Sort for consistent output
+          cells.sort((a, b) => a.engineRef.localeCompare(b.engineRef) || a.packRef.localeCompare(b.packRef));
+
+          // Output table
+          const table = formatResultsTable(cells);
+          console.log('TABLE<<EOF');
+          console.log(table);
+          console.log('EOF');
+
+          // Check for job failures
+          const hasFailures = cells.some(c => shouldFailJob(c.classification));
+          console.log('HAS_FAILURES=' + hasFailures);
+
+          // Write JSON output
+          fs.writeFileSync('compat-matrix.json', JSON.stringify(cells, null, 2));
+          EOF
+        env:
+          EXPECTATIONS: ${{ steps.expectations.outputs.expectations }}
+
+      - name: Print classification table
+        run: |
+          echo "${{ steps.classify.outputs.TABLE }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload classification results
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-matrix
+          path: compat-matrix.json
+
+      - name: Fail on unexpected results
+        if: steps.classify.outputs.HAS_FAILURES == 'true'
+        run: |
+          echo "::error::Compatibility matrix contains unexpected failures or unexpected passes"
+          exit 1

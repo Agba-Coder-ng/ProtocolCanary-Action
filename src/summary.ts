@@ -2,6 +2,7 @@ import * as core from "@actions/core";
 
 import { SummaryPublishFailedError } from "./errors";
 import { countReplayed } from "./output";
+import { codeSpan, escapeInline, fencedBlock } from "./markdown";
 import type { CanaryReport, OverallStatus, Surface } from "./output";
 
 const SURFACE_HEADINGS: Readonly<Record<Surface, string>> = {
@@ -42,15 +43,9 @@ function notablyList(report: CanaryReport, statuses: readonly ("fail" | "error" 
   return report.results
     .filter((r) => (statuses as readonly string[]).includes(r.status))
     .map((r) => {
-      const lines = [`- \`${r.testId}\` (${r.surface}) — ${r.summary}`];
+      const lines = [`- ${codeSpan(r.testId)} (${escapeInline(r.surface)}) — ${escapeInline(r.summary)}`];
       if (r.details !== undefined && r.details.trim() !== "") {
-        lines.push(
-          r.details
-            .trim()
-            .split("\n")
-            .map((line) => `  ${line}`)
-            .join("\n"),
-        );
+        lines.push(fencedBlock(r.details.trim()));
       }
       return lines.join("\n");
     });
@@ -58,17 +53,23 @@ function notablyList(report: CanaryReport, statuses: readonly ("fail" | "error" 
 
 /** Pure Markdown rendering, kept separate from `core.summary` so it can be
  * golden/snapshot-tested without a GitHub Actions runtime. */
-export function renderSummaryMarkdown(report: CanaryReport): string {
+export function renderSummaryMarkdown(
+  report: CanaryReport,
+  engineArgs?: readonly string[],
+  engineVersion?: string,
+): string {
   const lines: string[] = [];
   lines.push("## Stellar Protocol Canary", "");
-  lines.push(`Protocol: ${String(report.targetProtocol)}`);
-  lines.push(`Project: ${report.project.name} (${report.project.type})`);
+  lines.push(`Protocol: ${escapeInline(String(report.targetProtocol))}`);
+  lines.push(`Project: ${escapeInline(report.project.name)} (${escapeInline(report.project.type)})`);
   if (report.network !== undefined) {
     const observed =
-      report.network.observedProtocol !== undefined ? ` — observed protocol ${String(report.network.observedProtocol)}` : "";
-    lines.push(`Network: ${report.network.name}${observed}`);
+      report.network.observedProtocol !== undefined
+        ? ` — observed protocol ${escapeInline(String(report.network.observedProtocol))}`
+        : "";
+    lines.push(`Network: ${escapeInline(report.network.name)}${observed}`);
   }
-  lines.push(`Canary version: ${report.toolVersion}`, "");
+  lines.push(`Canary version: ${escapeInline(report.toolVersion)}`, "");
 
   const rows = SURFACE_ORDER.map((surface) => surfaceRowLabel(report.results, surface)).filter(
     (row): row is string => row !== undefined,
@@ -109,14 +110,137 @@ export function renderSummaryMarkdown(report: CanaryReport): string {
     lines.push(
       "<details><summary>Skipped fixtures</summary>",
       "",
-      ...report.skipped.map((s) => `- \`${s.fixtureId}\` (${s.surface}) — ${s.reason}`),
+      ...report.skipped.map((s) => `- ${codeSpan(s.fixtureId)} (${escapeInline(s.surface)}) — ${escapeInline(s.reason)}`),
       "",
       "</details>",
       "",
     );
   }
 
+  // Reproduction command section (issue #416)
+  if (engineArgs !== undefined && engineArgs.length > 0) {
+    lines.push(renderReproductionCommand(engineArgs, engineVersion));
+  }
+
   return lines.join("\n");
+}
+
+/**
+ * Renders a collapsed <details> section with the engine version and a
+ * copy-pasteable `stellar-canary check` command.
+ *
+ * Arguments are quoted for POSIX shell safety. The --rpc-url value is
+ * masked when it contains userinfo, a query string, or a fragment, using
+ * the same parsing as src/redact.ts.
+ */
+function renderReproductionCommand(args: readonly string[], engineVersion?: string): string {
+  const lines: string[] = [];
+  lines.push("<details><summary>Reproduction command</summary>", "");
+
+  if (engineVersion !== undefined) {
+    lines.push(`Engine version: ${escapeInline(engineVersion)}`, "");
+  }
+
+  // Build the command string with POSIX shell quoting
+  const command = buildCommandString(args);
+  lines.push(fencedBlock(command), "", "</details>", "");
+
+  return lines.join("\n");
+}
+
+/**
+ * Builds a POSIX-shell-safe command string from the argument array.
+ *
+ * Masks the --rpc-url value when it contains userinfo, query string, or fragment.
+ * Quotes arguments that contain spaces, quotes, or shell metacharacters.
+ */
+function buildCommandString(args: readonly string[]): string {
+  const parts: string[] = ["stellar-canary"];
+
+  let i = 0;
+  while (i < args.length) {
+    const arg = args[i]!; // i < args.length guaranteed by loop condition
+    const nextArg = args[i + 1];
+
+    // Mask --rpc-url value if it contains credentials, query, or fragment
+    if (arg === "--rpc-url" && nextArg !== undefined) {
+      parts.push(arg, maskRpcUrl(nextArg));
+      i += 2; // Skip the next argument since we handled it
+      continue;
+    }
+
+    parts.push(quoteForShell(arg));
+    i++;
+  }
+
+  return parts.join(" ");
+}
+
+/**
+ * Quotes a string for safe use in a POSIX shell command.
+ *
+ * Uses single quotes (which preserve literal content) and handles embedded
+ * single quotes by closing the quote, adding an escaped single quote, and
+ * reopening the quote: 'foo'\''bar'.
+ */
+function quoteForShell(arg: string): string {
+  // If the argument contains no special characters, leave it unquoted
+  if (/^[A-Za-z0-9_./@:-]+$/.test(arg)) {
+    return arg;
+  }
+  // Otherwise, wrap in single quotes and escape any embedded single quotes
+  return "'" + arg.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Masks an RPC URL if it contains userinfo, query string, or fragment.
+ * Uses the same logic as src/redact.ts to identify and mask credentials.
+ */
+function maskRpcUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    // Check if there's userinfo, query, or fragment to mask
+    const hasUserinfo = parsed.username !== "" || parsed.password !== "";
+    const hasQuery = parsed.search !== "";
+    const hasFragment = parsed.hash !== "";
+
+    if (!hasUserinfo && !hasQuery && !hasFragment) {
+      return url; // No sensitive parts to mask
+    }
+
+    // Reconstruct URL with masked sensitive parts
+    const schemeEnd = url.indexOf("://") + 3;
+    if (schemeEnd === 3) {
+      return url; // Not a valid URL format, return as-is
+    }
+
+    const remainder = url.slice(schemeEnd);
+    const queryStart = remainder.indexOf("?");
+    const fragmentStart = remainder.indexOf("#");
+    const suffixStart = Math.min(
+      queryStart !== -1 ? queryStart : Infinity,
+      fragmentStart !== -1 ? fragmentStart : Infinity,
+    );
+    const beforeSuffix = suffixStart === Infinity ? remainder : remainder.slice(0, suffixStart);
+    const hasSuffix = suffixStart !== Infinity;
+
+    const pathStart = beforeSuffix.indexOf("/");
+    const authorityEnd = pathStart === -1 ? beforeSuffix.length : pathStart;
+    const authority = beforeSuffix.slice(0, authorityEnd);
+    const path = beforeSuffix.slice(authorityEnd);
+
+    // Mask userinfo in authority (user:pass@host -> [REDACTED]@host)
+    const at = authority.lastIndexOf("@");
+    const safeAuthority = at === -1 ? authority : `[REDACTED]@${authority.slice(at + 1)}`;
+
+    // Mask query and fragment
+    const safeSuffix = hasSuffix ? `[REDACTED]` : "";
+
+    return `${url.slice(0, schemeEnd)}${safeAuthority}${path}${safeSuffix}`;
+  } catch {
+    // If URL parsing fails, return the original (will be quoted by quoteForShell)
+    return url;
+  }
 }
 
 /**

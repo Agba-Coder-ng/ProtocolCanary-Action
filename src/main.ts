@@ -117,9 +117,12 @@ export async function run(): Promise<void> {
   core.info(`Protocol: ${inputs.protocol !== undefined ? String(inputs.protocol) : "(from configuration)"}`);
   core.info("Running compatibility checks...");
 
+  // Build the engine arguments for the reproduction command display
+  const engineArgs = buildCheckArgs(inputs, resolved.version);
+
   let execution;
   try {
-    execution = await runCheck(installed.binaryPath, buildCheckArgs(inputs, resolved.version), inputs.timeoutMinutes * 60_000);
+    execution = await runCheck(installed.binaryPath, engineArgs, inputs.timeoutMinutes * 60_000);
   } catch (error) {
     const diagnostic = error instanceof TimeoutError && error.stderr ? error.stderr : "";
     if (error instanceof TimeoutError && error.stderr.trim() !== "") {
@@ -180,7 +183,7 @@ export async function run(): Promise<void> {
   }
 
   try {
-    await writeSummary(renderSummaryMarkdown(report));
+    await writeSummary(renderSummaryMarkdown(report, engineArgs, resolved.version));
   } catch (error) {
     core.setFailed(describeError(error));
   }
