@@ -31,7 +31,10 @@ function workflowSource(): string {
   if (!fs.existsSync(WORKFLOW_PATH)) {
     throw new Error(`Missing shipped workflow: ${WORKFLOW_PATH}`);
   }
-  return fs.readFileSync(WORKFLOW_PATH, "utf8");
+  // Windows runners materialise untracked-by-.gitattributes text files with
+  // CRLF endings (runner git uses core.autocrlf=true); the extraction regexes
+  // below are line-ending sensitive, so read the stored LF form on every OS.
+  return fs.readFileSync(WORKFLOW_PATH, "utf8").replace(/\r\n/g, "\n");
 }
 
 /** Extracts the literal `run: |` block that belongs to the step with `id: <stepId>`. */
@@ -78,16 +81,24 @@ interface RunResult {
   stderr: string;
 }
 
-function runScript(script: string, env: Record<string, string>, extraPath?: string): RunResult {
+function runScript(script: string, env: Record<string, string>, curlStub?: string): RunResult {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "l75-fork-boundary-"));
   const scriptPath = path.join(dir, "step.sh");
   fs.writeFileSync(scriptPath, script);
+  // With a stub, run the step inside the shell that also defines the stub:
+  // `. ./step.sh` keeps the shell's `curl` function visible to every command
+  // the step runs (shell functions take precedence over PATH lookups). The
+  // old scheme prepended a stub directory to PATH, which cannot work on the
+  // Windows runner (":" is not a PATH separator there and the extensionless
+  // stub is not executable), so the real curl.exe answered with
+  // "curl: (6) Could not resolve host" and every stubbed probe degraded.
+  const command = curlStub === undefined ? [scriptPath] : ["-c", `${curlStub}\n. ./step.sh`];
   const fullEnv: NodeJS.ProcessEnv = {
-    PATH: [extraPath, process.env.PATH].filter(Boolean).join(":"),
+    PATH: process.env.PATH ?? "",
     HOME: process.env.HOME ?? dir,
     ...env,
   };
-  const result = spawnSync("bash", [scriptPath], { cwd: dir, env: fullEnv, encoding: "utf8" });
+  const result = spawnSync("bash", command, { cwd: dir, env: fullEnv, encoding: "utf8" });
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
@@ -99,14 +110,15 @@ function fixtureWorkflow(name: string, body: string): string {
   return file;
 }
 
-/** Installs a stub `curl` on PATH that reports `httpCode` for any request,
- * mirroring real curl behaviour with `--write-out '%{http_code}'` (which exits
- * 0 even for 4xx responses unless --fail is given). */
-function fakeCurlDir(httpCode: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "l75-curl-"));
-  const stub = path.join(dir, "curl");
-  fs.writeFileSync(stub, ["#!/bin/bash", `printf '%s' '${httpCode}'`, "exit 0", ""].join("\n"), { mode: 0o755 });
-  return dir;
+/** Builds a bash function definition shadowing `curl` for one probe call:
+ * it reports `httpCode` for any request, mirroring real curl behaviour with
+ * `--write-out '%{http_code}'` (which exits 0 even for 4xx responses unless
+ * --fail is given). Defining it as a shell function — instead of a stub
+ * binary on PATH — is what makes the probe stubbed on Windows and ubuntu
+ * alike: bash resolves functions before PATH entries, and the runner's real
+ * curl.exe stays unreachable from the step either way. */
+function fakeCurlFunction(httpCode: string): string {
+  return `curl() { printf '%s' '${httpCode}'; return 0; }`;
 }
 
 const CLEAN_WORKFLOW = [
@@ -217,10 +229,9 @@ describe("test-fork-boundary workflow (#369)", () => {
   it("probe script passes when the write attempt is refused with 403 or 401", () => {
     const script = extractRunScript(workflowSource(), "token-boundary-probe");
     for (const code of ["403", "401"]) {
-      const dir = fakeCurlDir(code);
       const result = runScript(script, {
         GITHUB_TOKEN: "s", GITHUB_REPOSITORY: "o/r", GITHUB_RUN_ID: "1", GH_API_BASE: "https://example.invalid",
-      }, dir);
+      }, fakeCurlFunction(code));
       expect(result.stdout + result.stderr, `HTTP ${code} proves the boundary holds`).toContain("boundary holds");
       expect(result.status).toBe(0);
     }
@@ -228,10 +239,9 @@ describe("test-fork-boundary workflow (#369)", () => {
 
   it("probe script fails closed when the write attempt is ACCEPTED (elevated token)", () => {
     const script = extractRunScript(workflowSource(), "token-boundary-probe");
-    const dir = fakeCurlDir("200");
     const result = runScript(script, {
       GITHUB_TOKEN: "s", GITHUB_REPOSITORY: "o/r", GITHUB_RUN_ID: "1", GH_API_BASE: "https://example.invalid",
-    }, dir);
+    }, fakeCurlFunction("200"));
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
   });
@@ -239,7 +249,9 @@ describe("test-fork-boundary workflow (#369)", () => {
   it("documents the fork PR trust model in docs/security-model.md", () => {
     const doc = path.join(REPO_ROOT, "docs", "security-model.md");
     expect(fs.existsSync(doc), "docs/security-model.md must ship").toBe(true);
-    const text = fs.readFileSync(doc, "utf8");
+    // CRLF-normalised read — see workflowSource() for why (windows checkout
+    // rewrites untracked-by-.gitattributes text files).
+    const text = fs.readFileSync(doc, "utf8").replace(/\r\n/g, "\n");
     for (const heading of ["pull_request", "fork", "permissions", "secret"]) {
       expect(text.toLowerCase(), `security model must cover "${heading}"`).toContain(heading);
     }

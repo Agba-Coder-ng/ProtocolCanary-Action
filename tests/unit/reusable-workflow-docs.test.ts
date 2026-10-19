@@ -23,7 +23,11 @@ function docText(): string {
   if (!fs.existsSync(DOC_PATH)) {
     throw new Error(`Missing shipped doc: ${DOC_PATH}`);
   }
-  return fs.readFileSync(DOC_PATH, "utf8");
+  // Windows runners check text files out with CRLF endings (the runner's git
+  // applies core.autocrlf=true; .gitattributes pins LF only for *.ts). The
+  // guide's structure is the unit under test, not the checkout's line
+  // endings, so normalise to the stored LF form before any regex runs.
+  return fs.readFileSync(DOC_PATH, "utf8").replace(/\r\n/g, "\n");
 }
 
 function yamlBlocks(markdown: string): string[] {

@@ -34,7 +34,11 @@ function workflowSource(): string {
   if (!fs.existsSync(WORKFLOW_PATH)) {
     throw new Error(`Missing shipped workflow: ${WORKFLOW_PATH}`);
   }
-  return fs.readFileSync(WORKFLOW_PATH, "utf8");
+  // Windows runners materialise untracked-by-.gitattributes text files with
+  // CRLF endings (runner git uses core.autocrlf=true); the extraction and
+  // structure regexes below are line-ending sensitive, so read the stored LF
+  // form on every OS.
+  return fs.readFileSync(WORKFLOW_PATH, "utf8").replace(/\r\n/g, "\n");
 }
 
 function extractRunScript(source: string, stepId: string): string {
@@ -80,15 +84,23 @@ interface RunResult {
   stderr: string;
 }
 
-function runScript(script: string, env: StepEnv, opts?: { extraPath?: string; cwd?: string }): RunResult {
+function runScript(script: string, env: StepEnv, opts?: { stub?: string; cwd?: string }): RunResult {
   const dir = opts?.cwd ?? fs.mkdtempSync(path.join(os.tmpdir(), "l75-conformance-"));
   const scriptPath = path.join(dir, "step.sh");
   fs.writeFileSync(scriptPath, script);
-  const result = spawnSync("bash", [scriptPath], {
+  // With a stub, run the step inside the shell that also defines it:
+  // `. ./step.sh` keeps the shell's `curl` function visible to every command
+  // the step runs (bash resolves functions before PATH entries). The old
+  // scheme prepended a stub binary to PATH, which cannot work on the Windows
+  // runner (":" is not a PATH separator there and the extensionless stub is
+  // not executable), so the real curl.exe answered every stubbed request
+  // with "curl: (6) Could not resolve host" instead of the fixture API.
+  const command = opts?.stub === undefined ? [scriptPath] : ["-c", `${opts.stub}\n. ./step.sh`];
+  const result = spawnSync("bash", command, {
     cwd: dir,
     encoding: "utf8",
     env: {
-      PATH: [opts?.extraPath, process.env.PATH].filter(Boolean).join(":"),
+      PATH: process.env.PATH ?? "",
       HOME: process.env.HOME ?? dir,
       ...env,
     },
@@ -97,54 +109,53 @@ function runScript(script: string, env: StepEnv, opts?: { extraPath?: string; cw
 }
 
 /**
- * Stub `curl` driven by a JSON scenario file: every request whose URL contains
- * `match` responds with the mapped body (or the named local file when the
- * script asked for `--output <file>`), emulating the artifacts REST API.
+ * Stub `curl` as a POSIX shell function: scenario data arrives through env
+ * vars (never through temp-file paths embedded in bash text, which break on
+ * Windows), and the function takes lookup precedence over any real curl on
+ * the machine. Mirrors the artifacts REST API: every request whose URL
+ * contains `https://example.invalid` responds with the mapped body (or the
+ * named local file when the script asked for `--output <file>`).
  */
-function fakeCurlDir(scenario: { list: string; zip?: string; failList?: boolean }): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "l75-curl370-"));
-  const stub = path.join(dir, "curl");
-  const lines = [
-    "#!/bin/bash",
-    'out=""',
-    'url=""',
-    'args=("$@")',
-    'for i in "${!args[@]}"; do',
-    '  a="${args[$i]}"',
-    '  case "$a" in',
-    '    --output) out="${args[$((i+1))]}";;',
-    '    https://example.invalid/*) url="$a";;',
-    '  esac',
-    'done',
-    'case "$url" in',
-    '  */artifacts/*/zip*)',
-    '    if [ -n "$out" ] && [ -f "@@ZIPFILE@@" ]; then cp "@@ZIPFILE@@" "$out"; exit 0; fi',
-    '    exit 22;;',
-    '  */artifacts*)',
-    '    if [ "@@FAILLIST@@" = "1" ]; then exit 22; fi',
-    '    if [ -n "$out" ] && [ "$out" != "-" ]; then printf \'%s\' "$(cat "@@LISTFILE@@")" > "$out"; else printf \'%s\' "$(cat "@@LISTFILE@@")"; fi',
-    '    exit 0;;',
-    '  *) exit 22;;',
-    'esac',
-    "",
-  ];
-  fs.writeFileSync(
-    stub,
-    lines
-      .join("\n")
-      .replaceAll("@@LISTFILE@@", writeFile("artifacts.json", scenario.list))
-      .replaceAll("@@ZIPFILE@@", scenario.zip ?? "/nonexistent-l75-zip")
-      .replace("@@FAILLIST@@", scenario.failList ? "1" : "0"),
-    { mode: 0o755 },
-  );
-  return dir;
-}
+const CURL_STUB = [
+  "curl() {",
+  '  local out="" url="" i a',
+  '  local args=("$@")',
+  '  i=0',
+  '  while [ "$i" -lt "${#args[@]}" ]; do',
+  '    a="${args[$i]}"',
+  '    case "$a" in',
+  '      --output) i=$((i + 1)); out="${args[$i]}";;',
+  '      https://example.invalid*) url="$a";;',
+  "    esac",
+  "    i=$((i + 1))",
+  "  done",
+  '  case "$url" in',
+  "    */artifacts*/zip*)",
+  '      if [ -n "$out" ] && [ -n "${FAKE_ARTIFACT_ZIP:-}" ] && [ -f "${FAKE_ARTIFACT_ZIP}" ]; then',
+  '        cp -- "${FAKE_ARTIFACT_ZIP}" "$out"',
+  "        return 0",
+  "      fi",
+  "      return 22;;",
+  "    */artifacts*)",
+  '      if [ "${FAKE_ARTIFACT_FAILLIST:-0}" = "1" ]; then return 22; fi',
+  '      if [ -n "$out" ] && [ "$out" != "-" ]; then',
+  "        printf '%s' \"${FAKE_ARTIFACT_LIST:-}\" > \"$out\"",
+  "      else",
+  "        printf '%s' \"${FAKE_ARTIFACT_LIST:-}\"",
+  "      fi",
+  "      return 0;;",
+  "    *) return 22;;",
+  "  esac",
+  "}",
+].join("\n");
 
-function writeFile(name: string, content: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "l75-data-"));
-  const file = path.join(dir, name);
-  fs.writeFileSync(file, content);
-  return file;
+function curlScenarioEnv(scenario: { list: string; zip?: string; failList?: boolean }): StepEnv {
+  const env: StepEnv = { FAKE_ARTIFACT_LIST: scenario.list };
+  // Forward slashes: the msys runtime opens native "C:/…" paths directly,
+  // while backslashes would be eaten as escapes inside the bash stub.
+  if (scenario.zip !== undefined) env.FAKE_ARTIFACT_ZIP = scenario.zip.split("\\").join("/");
+  if (scenario.failList === true) env.FAKE_ARTIFACT_FAILLIST = "1";
+  return env;
 }
 
 /** Real zip archive containing a Protocol Canary-shaped JSON report. */
@@ -211,7 +222,8 @@ describe("test-reusable-workflow conformance (#370)", () => {
     expect(fs.existsSync(path.join(SAMPLE_ROOT, ".stellar-canary.toml")), "sample project config present").toBe(true);
     expect(fs.existsSync(path.join(SAMPLE_ROOT, "fixtures")), "sample fixtures directory present").toBe(true);
     // The `with:` block may only pass inputs the reusable workflow declares.
-    const reusable = fs.readFileSync(REUSABLE_PATH, "utf8");
+    // CRLF-normalised read — see workflowSource() for why.
+    const reusable = fs.readFileSync(REUSABLE_PATH, "utf8").replace(/\r\n/g, "\n");
     const inputsStart = reusable.indexOf("    inputs:");
     const inputsEnd = reusable.indexOf("    outputs:");
     expect(inputsStart, "reusable workflow declares workflow_call inputs").toBeGreaterThan(-1);
@@ -230,8 +242,11 @@ describe("test-reusable-workflow conformance (#370)", () => {
   it("fetch-report-artifact unpacks the shipped JSON report from a real run artifact", () => {
     const script = extractRunScript(workflowSource(), "fetch-report-artifact");
     const zip = reportZipFixture();
-    const dir = fakeCurlDir({ list: VALID_LIST, zip });
-    const result = runScript(script, artifactEnv(), { extraPath: dir });
+    const result = runScript(
+      script,
+      { ...artifactEnv(), ...curlScenarioEnv({ list: VALID_LIST, zip }) },
+      { stub: CURL_STUB },
+    );
     // cwd is a fresh tmp dir inside runScript; the script unpacks relative to it.
     expect(result.stdout + result.stderr).not.toContain("::error::");
     expect(result.status).toBe(0);
@@ -240,8 +255,11 @@ describe("test-reusable-workflow conformance (#370)", () => {
   it("fetch-report-artifact fails closed when the run produced no report artifact", () => {
     const script = extractRunScript(workflowSource(), "fetch-report-artifact");
     const empty = JSON.stringify({ total_count: 0, artifacts: [] });
-    const dir = fakeCurlDir({ list: empty });
-    const result = runScript(script, artifactEnv(), { extraPath: dir });
+    const result = runScript(
+      script,
+      { ...artifactEnv(), ...curlScenarioEnv({ list: empty }) },
+      { stub: CURL_STUB },
+    );
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
     expect(result.stdout + result.stderr).toContain("stellar-protocol-canary-report");
@@ -250,16 +268,22 @@ describe("test-reusable-workflow conformance (#370)", () => {
   it("fetch-report-artifact ignores artifacts from other workflow runs", () => {
     const script = extractRunScript(workflowSource(), "fetch-report-artifact");
     const otherRun = JSON.stringify({ total_count: 1, artifacts: [{ id: 1, name: "stellar-protocol-canary-report", workflow_run: { id: 7 } }] });
-    const dir = fakeCurlDir({ list: otherRun });
-    const result = runScript(script, artifactEnv(), { extraPath: dir });
+    const result = runScript(
+      script,
+      { ...artifactEnv(), ...curlScenarioEnv({ list: otherRun }) },
+      { stub: CURL_STUB },
+    );
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
   });
 
   it("fetch-report-artifact fails when the API itself is unreachable", () => {
     const script = extractRunScript(workflowSource(), "fetch-report-artifact");
-    const dir = fakeCurlDir({ list: VALID_LIST, failList: true });
-    const result = runScript(script, artifactEnv(), { extraPath: dir });
+    const result = runScript(
+      script,
+      { ...artifactEnv(), ...curlScenarioEnv({ list: VALID_LIST, failList: true }) },
+      { stub: CURL_STUB },
+    );
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain("::error::");
   });
