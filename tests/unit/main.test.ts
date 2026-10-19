@@ -110,6 +110,7 @@ const INPUTS: ActionInputs = {
   fixturesPackVersion: undefined,
   fixturesPackProtocol: undefined,
   githubToken: undefined,
+  generateReceipt: false,
 };
 
 const PASS_REPORT = report({
