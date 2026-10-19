@@ -369,7 +369,7 @@ describe("strict-integrity fail-closed policy at the verification boundary (issu
   it("aborts immediately when no checksum manifest is published at all", async () => {
     fs.writeFileSync(binaryPath(), "binary");
 
-    await expect(ensureCanaryInstalled(RESOLVED, 60_000, true)).rejects.toThrow(
+    await expect(ensureCanaryInstalled(RESOLVED, 60_000, undefined, true)).rejects.toThrow(
       /strict-integrity.*no published checksum manifest/s,
     );
   });
@@ -380,7 +380,7 @@ describe("strict-integrity fail-closed policy at the verification boundary (issu
       .mockImplementationOnce(respond(200, releaseWithAsset("https://example.test/SHA256SUMS")))
       .mockImplementationOnce(respond(200, `${"a".repeat(64)}  some-other-tool\n`));
 
-    await expect(ensureCanaryInstalled(RESOLVED, 60_000, true)).rejects.toThrow(/strict-integrity.*no entry/s);
+    await expect(ensureCanaryInstalled(RESOLVED, 60_000, undefined, true)).rejects.toThrow(/strict-integrity.*no entry/s);
   });
 
   it("aborts when the checksum lookup is redirected (unverifiable under D-11)", async () => {
@@ -389,7 +389,7 @@ describe("strict-integrity fail-closed policy at the verification boundary (issu
       .mockImplementationOnce(respond(200, releaseWithAsset("https://example.test/SHA256SUMS")))
       .mockImplementationOnce(respond(302, "", { location: "https://evil.example.com/SHA256SUMS" }));
 
-    await expect(ensureCanaryInstalled(RESOLVED, 60_000, true)).rejects.toThrow(/strict-integrity/s);
+    await expect(ensureCanaryInstalled(RESOLVED, 60_000, undefined, true)).rejects.toThrow(/strict-integrity/s);
     const urls = requestedUrls();
     expect(urls.some((url) => url.includes("evil.example.com"))).toBe(false);
   });
@@ -401,7 +401,7 @@ describe("strict-integrity fail-closed policy at the verification boundary (issu
       .mockImplementationOnce(respond(200, releaseWithAsset("https://example.test/SHA256SUMS")))
       .mockImplementationOnce(respond(200, `${sha256("pristine")}  stellar-canary\n`));
 
-    await expect(ensureCanaryInstalled(RESOLVED, 60_000, true)).rejects.toThrow(/Checksum verification failed/);
+    await expect(ensureCanaryInstalled(RESOLVED, 60_000, undefined, true)).rejects.toThrow(/Checksum verification failed/);
     expect(cacheMocks.saveCacheMock).not.toHaveBeenCalled();
   });
 
@@ -411,7 +411,7 @@ describe("strict-integrity fail-closed policy at the verification boundary (issu
       .mockImplementationOnce(respond(200, releaseWithAsset("https://example.test/SHA256SUMS")))
       .mockImplementationOnce(respond(200, `${sha256("binary")}  stellar-canary\n`));
 
-    const installed = await ensureCanaryInstalled(RESOLVED, 60_000, true);
+    const installed = await ensureCanaryInstalled(RESOLVED, 60_000, undefined, true);
     expect(installed.binaryPath).toBe(binaryPath());
     expect(coreMocks.infoMock).toHaveBeenCalledWith(expect.stringContaining("Verified stellar-canary"));
   });

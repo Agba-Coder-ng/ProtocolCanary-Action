@@ -379,7 +379,7 @@ describe("renderSummaryMarkdown — Provenance & Trust section (#373)", () => {
     });
 
     expect(markdown).toContain("data integrity");
-    expect(markdown).toMatch(/not .*proof of (the )?release author/i);
+    expect(markdown).toMatch(/not\D*proof of (the )?release author/i);
     expect(markdown).toContain("D-07");
   });
 

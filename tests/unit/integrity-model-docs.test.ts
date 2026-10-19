@@ -31,7 +31,7 @@ function doc(): string {
 function relativeLinkTargets(text: string): string[] {
   const targets: string[] = [];
   for (const match of text.matchAll(/\]\(([^)\s]+)\)/g)) {
-    const target = match[1];
+    const target = match[1] ?? "";
     if (/^(https?:|mailto:|#)/.test(target)) {
       continue;
     }
