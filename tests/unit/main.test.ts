@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as canaryModule from "../../src/canary";
-import { SummaryPublishFailedError } from "../../src/errors";
+import { InstallationFailedError, SummaryPublishFailedError, TimeoutError } from "../../src/errors";
 import type { ActionInputs } from "../../src/inputs";
 import type * as inputsModule from "../../src/inputs";
 import type * as runnerModule from "../../src/runner";
@@ -25,6 +25,8 @@ const {
   warningMock,
   infoMock,
   debugMock,
+  startGroupMock,
+  endGroupMock,
 } = vi.hoisted(() => ({
   getInputsMock: vi.fn<() => ActionInputs>(),
   ensureCanaryInstalledMock: vi.fn(),
@@ -38,6 +40,8 @@ const {
   warningMock: vi.fn(),
   infoMock: vi.fn(),
   debugMock: vi.fn(),
+  startGroupMock: vi.fn(),
+  endGroupMock: vi.fn(),
 }));
 
 vi.mock("@actions/core", async (importOriginal) => {
@@ -50,6 +54,8 @@ vi.mock("@actions/core", async (importOriginal) => {
     warning: warningMock,
     info: infoMock,
     debug: debugMock,
+    startGroup: startGroupMock,
+    endGroup: endGroupMock,
   };
 });
 
@@ -103,6 +109,7 @@ const INPUTS: ActionInputs = {
   allowEmpty: false,
   fixturesPackVersion: undefined,
   fixturesPackProtocol: undefined,
+  githubToken: undefined,
 };
 
 const PASS_REPORT = report({
@@ -135,6 +142,8 @@ describe("run", () => {
     warningMock.mockReset();
     infoMock.mockReset();
     debugMock.mockReset();
+    startGroupMock.mockReset();
+    endGroupMock.mockReset();
 
     // The success path writes the report under RUNNER_TEMP; give each test a
     // private directory (as the integration suite does) so it neither leaks
@@ -182,7 +191,7 @@ describe("run", () => {
     await run();
 
     expect(ensureCanaryInstalledMock).toHaveBeenCalledTimes(1);
-    expect(ensureCanaryInstalledMock).toHaveBeenCalledWith(expect.anything(), 60_000);
+    expect(ensureCanaryInstalledMock).toHaveBeenCalledWith(expect.anything(), 60_000, undefined);
   });
 
   // #271, branch 1: a child killed by a signal closes with a null exit code,
@@ -294,4 +303,85 @@ describe("run", () => {
     expect(errorMock).not.toHaveBeenCalled();
     expect(warningMock).not.toHaveBeenCalled();
   });
+
+  // #429: engine stderr is printed in a collapsed log group if non-empty
+  it("prints non-empty Canary stderr in a collapsed log group on success (#429)", async () => {
+    runCheckMock.mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      stdout: JSON.stringify(PASS_REPORT),
+      stderr: "warning: test surface warning\n",
+    });
+
+    await run();
+
+    expect(startGroupMock).toHaveBeenCalledWith("Canary diagnostics");
+    expect(endGroupMock).toHaveBeenCalledTimes(1);
+    const printed = infoMock.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(printed).toContain("warning: test surface warning");
+  });
+
+  it("does not print Canary diagnostics log group when stderr is whitespace or empty (#429)", async () => {
+    runCheckMock.mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      stdout: JSON.stringify(PASS_REPORT),
+      stderr: "   \n\t  ",
+    });
+
+    await run();
+
+    expect(startGroupMock).not.toHaveBeenCalledWith("Canary diagnostics");
+  });
+
+  // #426: installation diagnostics are forwarded to handleExecutionFailure
+  it("forwards cargo install failure diagnostics to execution-failure summary (#426)", async () => {
+    ensureCanaryInstalledMock.mockRejectedValueOnce(
+      new InstallationFailedError("cargo install failed", "error[E0432]: unresolved import\n"),
+    );
+
+    await run();
+
+    expect(setFailedMock).toHaveBeenCalledTimes(1);
+    expect(renderExecutionFailureMarkdownMock).toHaveBeenCalledWith(
+      expect.stringContaining("cargo install failed"),
+      "error[E0432]: unresolved import\n",
+    );
+  });
+
+  // #427 / #429: TimeoutError stderr is printed in log block and forwarded to summary
+  it("prints diagnostics and forwards stderr to execution-failure summary on timeout (#427, #429)", async () => {
+    runCheckMock.mockRejectedValueOnce(
+      new TimeoutError("Canary check timed out after 60000ms and was terminated.", "", "partial engine log before timeout"),
+    );
+
+    await run();
+
+    expect(startGroupMock).toHaveBeenCalledWith("Canary diagnostics");
+    expect(endGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderExecutionFailureMarkdownMock).toHaveBeenCalledWith(
+      expect.stringContaining("timed out"),
+      "partial engine log before timeout",
+    );
+  });
+
+  // #428: githubToken is forwarded to ensureCanaryInstalled
+  it("forwards githubToken to ensureCanaryInstalled (#428)", async () => {
+    getInputsMock.mockReturnValue({ ...INPUTS, githubToken: "ghp_custom123" });
+    runCheckMock.mockResolvedValueOnce({
+      exitCode: 0,
+      signal: null,
+      stdout: JSON.stringify(PASS_REPORT),
+      stderr: "",
+    });
+
+    await run();
+
+    expect(ensureCanaryInstalledMock).toHaveBeenCalledWith(
+      expect.anything(),
+      60_000,
+      "ghp_custom123",
+    );
+  });
 });
+

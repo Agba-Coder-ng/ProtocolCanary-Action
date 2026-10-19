@@ -6,9 +6,10 @@ import * as path from "node:path";
 import { uploadReport } from "./artifact";
 import { emitAnnotations, emitExecutionFailureAnnotation, emitExitFailureAnnotation } from "./annotations";
 import { cargoInstallTimeoutMs, ensureCanaryInstalled } from "./canary";
-import { describeError, isCanaryActionError } from "./errors";
+import { InstallationFailedError, TimeoutError, describeError, isCanaryActionError } from "./errors";
 import type { ActionInputs } from "./inputs";
 import { getInputs } from "./inputs";
+import { printLogBlock } from "./log-block";
 import { countReplayed, describeExitCode, parseReport } from "./output";
 import { buildCheckArgs, engineSupportsAllowEmpty, extractDiagnostic, runCheck } from "./runner";
 import { renderExecutionFailureMarkdown, renderSummaryMarkdown, writeSummary } from "./summary";
@@ -87,7 +88,7 @@ export async function run(): Promise<void> {
     return;
   }
 
-  const resolved = await resolveVersion(inputs.version);
+  const resolved = await resolveVersion(inputs.version, { token: inputs.githubToken });
   core.info(
     `Stellar Protocol Canary Action\nCanary version: ${resolved.version} (${resolved.tag}${
       resolved.commitSha !== undefined ? `@${resolved.commitSha.slice(0, 12)}` : ""
@@ -96,9 +97,14 @@ export async function run(): Promise<void> {
 
   let installed;
   try {
-    installed = await ensureCanaryInstalled(resolved, cargoInstallTimeoutMs(inputs.timeoutMinutes));
+    installed = await ensureCanaryInstalled(
+      resolved,
+      cargoInstallTimeoutMs(inputs.timeoutMinutes),
+      inputs.githubToken,
+    );
   } catch (error) {
-    await handleExecutionFailure(describeError(error), "", inputs.annotations);
+    const diagnostic = error instanceof InstallationFailedError && error.diagnostic ? error.diagnostic : "";
+    await handleExecutionFailure(describeError(error), diagnostic, inputs.annotations);
     return;
   }
 
@@ -115,8 +121,16 @@ export async function run(): Promise<void> {
   try {
     execution = await runCheck(installed.binaryPath, buildCheckArgs(inputs, resolved.version), inputs.timeoutMinutes * 60_000);
   } catch (error) {
-    await handleExecutionFailure(describeError(error), "", inputs.annotations);
+    const diagnostic = error instanceof TimeoutError && error.stderr ? error.stderr : "";
+    if (error instanceof TimeoutError && error.stderr.trim() !== "") {
+      printLogBlock("Canary diagnostics", error.stderr);
+    }
+    await handleExecutionFailure(describeError(error), diagnostic, inputs.annotations);
     return;
+  }
+
+  if (execution.stderr.trim() !== "") {
+    printLogBlock("Canary diagnostics", execution.stderr);
   }
 
   const reportPath = reportFilePath();
