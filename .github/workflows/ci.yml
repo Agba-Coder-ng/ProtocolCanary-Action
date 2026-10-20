@@ -27,7 +27,7 @@ jobs:
         run: pip install zizmor==1.31.1
 
       - name: Install actionlint
-        uses: raven-actions/actionlint@5fb554523d45546ad2d61793ceb1fb3a1f8bbbb6 # v2.1.2
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2.1.2
         with:
           version: "1.7.7"
 
