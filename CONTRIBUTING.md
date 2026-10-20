@@ -53,9 +53,11 @@ repository, is the source of truth for the CLI's behavior.
 ```bash
 npm run typecheck    # tsc --noEmit, strict mode
 npm run lint         # eslint
-npm test             # vitest run (unit + integration)
+npm test             # vitest run (unit + integration, includes workflow-policy.test.ts)
 npm run test:coverage  # vitest run with v8 coverage over src/ (text, HTML, and lcov reports in coverage/)
 npm run build         # esbuild bundle to dist/index.js
+actionlint           # static analysis of .github/workflows/
+zizmor .github/workflows # security audit of .github/workflows/
 ```
 
 `npm run test:coverage` runs the same suite as `npm test` with coverage
@@ -162,6 +164,39 @@ settings.
 - Prefer the typed `CanaryActionError` subclasses in `src/errors.ts` over
   throwing a plain `Error`, so a caller can distinguish, for example, an
   installation failure from an invalid report.
+- Workflow files in `.github/workflows/` must follow repository security policy:
+  every workflow must explicitly declare a top-level `permissions:` block
+  (least privilege), and every external `uses:` action reference must be pinned
+  to a full 40-character commit SHA (with the single documented exception of the
+  reusable workflow calling the action's own `@v1` release tag).
+
+## Workflow linting and security checks
+
+Workflow files are analyzed in CI using `actionlint` and `zizmor`, as well as
+the vitest suite `tests/unit/workflow-policy.test.ts`.
+
+To run these checks locally:
+
+1. **Policy unit tests**:
+   ```bash
+   npm test
+   # or run the policy test specifically:
+   npx vitest run tests/unit/workflow-policy.test.ts
+   ```
+2. **actionlint** (checks syntax, expression schemas, and runner compatibility):
+   ```bash
+   actionlint .github/workflows/*.yml
+   ```
+   (Install via `go install github.com/rhysd/actionlint/cmd/actionlint@latest` or package manager).
+3. **zizmor** (checks for credential persistence, injection risks, and unpinned actions):
+   ```bash
+   zizmor .github/workflows
+   ```
+   (Install via `pip install zizmor` or `cargo install zizmor`).
+
+Prefer fixing findings directly over suppressing them. Any necessary suppression
+must include an explicit `# zizmor: ignore[rule-name]` comment with a clear,
+justified explanation on the affected line.
 
 ## Commit style
 
