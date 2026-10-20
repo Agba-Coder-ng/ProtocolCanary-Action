@@ -165,7 +165,7 @@ export interface CanaryCounts {
   readonly failed: number;
   readonly warnings: number;
   readonly errors: number;
-  readonly skipped: number;
+  readonly skipped?: number;
 }
 
 export interface CanaryReport {
@@ -196,7 +196,7 @@ function isCountsShape(value: unknown): value is CanaryCounts {
     typeof candidate.failed === "number" &&
     typeof candidate.warnings === "number" &&
     typeof candidate.errors === "number" &&
-    typeof candidate.skipped === "number"
+    (typeof candidate.skipped === "number" || candidate.skipped === undefined)
   );
 }
 
@@ -379,16 +379,29 @@ export function parseReport(stdout: string): CanaryReport {
   }
   const skipped = report.skipped as CanarySkip[] | undefined;
 
-  // Validate counts if present and well-formed; otherwise derive.
-  // This preserves the old behavior where a malformed counts field (missing
-  // fields, wrong types) is silently replaced by derived counts, but a
-  // well-formed counts field that disagrees with results/skipped is rejected.
-  const counts = isCountsShape(report.counts)
-    ? validateCounts(report.counts, results, skipped, "counts")
-    : deriveCounts(results, skipped);
+  // Validate counts if present and complete; otherwise derive.
+  // A malformed counts field (missing fields, wrong types) is silently
+  // replaced by derived counts, preserving the behavior older engines rely
+  // on. A well-formed counts field that disagrees with results/skipped is
+  // rejected. Engines that predate the `skipped` count omit only that one
+  // field: the rest of their counts are preserved and `skipped` is populated
+  // from the skipped array, exactly as before.
+  const rawCounts = isCountsShape(report.counts) ? report.counts : undefined;
+  let counts: CanaryCounts;
+  if (rawCounts === undefined) {
+    counts = deriveCounts(results, skipped);
+  } else if (rawCounts.skipped === undefined) {
+    counts = { ...rawCounts, skipped: skipped?.length ?? 0 };
+  } else {
+    counts = validateCounts(rawCounts, results, skipped, "counts");
+  }
 
+  // Spread the raw report so reserved/additive fields this Action does not
+  // (yet) model — `engineCommit`, `packDigest`, `network.error`, … — survive
+  // parsing for downstream consumers such as the Execution Receipt. The
+  // validated fields below overwrite their raw counterparts.
   return {
-    schemaVersion: report.schemaVersion,
+    ...report,
     toolVersion,
     targetProtocol,
     project,
@@ -396,7 +409,7 @@ export function parseReport(stdout: string): CanaryReport {
     status: report.status,
     counts,
     results,
-    ...(skipped !== undefined ? { skipped } : {}),
+    skipped,
     git: report.git ?? { commit: null, branch: null, isDirty: null },
   } as CanaryReport;
 }

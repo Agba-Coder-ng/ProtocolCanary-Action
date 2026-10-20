@@ -33,12 +33,12 @@ jobs:
         pack-ref: ${{ fromJson(format('["{0}"]', github.event.inputs.pack-refs || 'protocol-28,main')) }}
     steps:
       - name: Checkout ProtocolCanary-Action
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Checkout Protocol-Canary engine
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: StellarCanary/Protocol-Canary
           ref: ${{ matrix.engine-ref }}
@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout ProtocolCanary-Fixtures
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: StellarCanary/ProtocolCanary-Fixtures
           ref: ${{ matrix.pack-ref }}
@@ -54,12 +54,12 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustc, cargo
 
       - name: Cache engine build
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin
           key: engine-${{ matrix.engine-ref }}-${{ runner.os }}-${{ runner.arch }}
@@ -176,7 +176,7 @@ jobs:
           echo "build_outcome=$build_outcome" >> $GITHUB_OUTPUT
 
       - name: Upload cell facts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cell-facts-${{ matrix.engine-ref }}-${{ matrix.pack-ref }}
           path: |
@@ -191,12 +191,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout ProtocolCanary-Action
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Download all cell facts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: cell-facts-*
           path: cell-facts
@@ -260,7 +260,7 @@ jobs:
           echo "${{ steps.classify.outputs.TABLE }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload classification results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: compat-matrix
           path: compat-matrix.json
