@@ -144,7 +144,7 @@ inputs:
     description: >-
       GitHub token used to authenticate read-only GitHub REST API requests
       to the public `StellarCanary/Protocol-Canary` repository (tag and release
-      lookups). Defaults to `${{ github.token }}`. If set to a non-empty value,
+      lookups). Defaults to the workflow's `github.token`. If set to a non-empty value,
       it takes precedence over the `GITHUB_TOKEN` environment variable. If empty
       or unset, the `GITHUB_TOKEN` environment variable is used if present;
       otherwise unauthenticated requests are made. Requires only `contents: read`
