@@ -267,10 +267,17 @@ is expected and leaves the pin untouched.
    newest `vX.Y.Z` in that major line (a re-run, or a tag pushed out of
    order), and pre-1.0 releases publish no floating major tag at all.
 
-   If you need to move a major tag by hand for an exceptional case, use an
-   annotated tag and force-push it — but never do this for a pre-1.0
-   release, and never move a major tag backwards:
+5. A post-release smoke test (`smoke-test` job in `.github/workflows/release.yml`)
+   runs immediately after the release is published. It invokes the Action by
+   its published tag against an offline fixture project to exercise the real
+   release artifact the way a consumer does, verifying `status`, check counts,
+   and JSON report generation.
+
+   To re-run the smoke test manually for an existing published release tag
+   without re-publishing:
    ```bash
-   git tag -fa v1 vX.Y.Z -m "Update v1 to vX.Y.Z"
-   git push origin v1 --force
+   gh workflow run release.yml -f release_tag=v0.1.1
    ```
+   or trigger the **Release** workflow from the Actions tab in GitHub and enter
+   the target tag in the `release_tag` input field.
+
