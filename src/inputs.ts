@@ -25,6 +25,10 @@ export interface ActionInputs {
   readonly fixturesPackProtocol: number | undefined;
   /** GitHub token for authenticating read-only API calls (tag and checksum lookups). */
   readonly githubToken: string | undefined;
+  /** Opt in to producing an Execution Receipt (#360) and exporting it as a
+   * workflow artifact (#362). Parses the documented boolean literals strictly
+   * and defaults to `false` when the input is omitted (#361). */
+  readonly generateReceipt: boolean;
 }
 
 const SEMVER_LIKE = /^\d+\.\d+\.\d+$/;
@@ -80,6 +84,7 @@ export function getInputs(): ActionInputs {
   if (githubToken !== undefined) {
     core.setSecret(githubToken);
   }
+  const generateReceipt = parseBoolean("generate-receipt", core.getInput("generate-receipt") || "false");
 
   // A validated input that silently does nothing is worse than a missing one:
   // it reads as "my pack is pinned" when the run used whatever
@@ -108,6 +113,7 @@ export function getInputs(): ActionInputs {
     fixturesPackVersion,
     fixturesPackProtocol,
     githubToken,
+    generateReceipt,
   };
 }
 
