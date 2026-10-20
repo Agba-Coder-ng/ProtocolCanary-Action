@@ -246,21 +246,33 @@ is expected and leaves the pin untouched.
 
 ## Release process
 
-1. Update `CHANGELOG.md`. Link every entry to the pull request that
-   introduced it with a trailing `([#123])` reference — e.g.
-   "- Add the annotations input ([#42])." — so the diff and discussion
-   for a change are one click away. Entries that predate the repository's
-   pull-request workflow (everything up to and including `v0.1.1`)
-   reference the commit that introduced the change instead, as
-   `([0de71ec])`, since no pull request exists for them.
-2. Update the supported-versions table in `SECURITY.md`: add the new
-   version as supported and mark every previously released version
-   unsupported, so the table stays in sync with `CHANGELOG.md`'s
+Before creating a release, ensure all metadata values agree. `.github/workflows/release.yml`
+runs `node scripts/verify-release-tag.mjs "$RELEASE_TAG"` before any installation or build
+steps to enforce that the pushed tag matches `package.json` and `CHANGELOG.md`.
+
+Release checklist:
+
+1. **Update `package.json`**: Bump `"version": "X.Y.Z"` to match the intended release.
+2. **Update `CHANGELOG.md`**:
+   - Ensure `CHANGELOG.md` has a heading matching `## [X.Y.Z]` or `## [X.Y.Z] - YYYY-MM-DD`.
+   - Ensure the release date (`YYYY-MM-DD`) is filled in before tagging.
+   - Move relevant items from `## [Unreleased]` under the new version heading.
+   - Link every entry to the pull request that introduced it with a trailing `([#123])` reference — e.g.
+     "- Add the annotations input ([#42])." — so the diff and discussion
+     for a change are one click away. Entries that predate the repository's
+     pull-request workflow (everything up to and including `v0.1.1`)
+     reference the commit that introduced the change instead, as
+     `([0de71ec])`, since no pull request exists for them.
+3. **Update `SECURITY.md`**: Update the supported-versions table by adding the new
+   version as supported and marking previously released versions
+   unsupported, keeping the table in sync with `CHANGELOG.md`'s
    release history.
-3. Tag `vX.Y.Z` on `main` (annotated tag, matching `package.json`'s
-   version). `.github/workflows/release.yml` verifies the build and tests
-   for that tag and publishes a GitHub Release.
-4. The floating major tag (e.g. `v1`) is moved automatically by
+4. **Tag `vX.Y.Z` on `main`**: Create an annotated tag whose name strictly matches
+   `vX.Y.Z` (matching `package.json`'s version with a leading `v`). Pre-release
+   suffixes (such as `-rc.1`) and unpinned or non-semver tags are rejected.
+   `.github/workflows/release.yml` verifies that the tag, `package.json`, and
+   `CHANGELOG.md` match before running tests and publishing a GitHub Release.
+5. **Floating major tag**: The floating major tag (e.g. `v1`) is moved automatically by
    `.github/workflows/release.yml`, in the same job, after the release is
    created. No manual step is required. The workflow only ever moves the
    major tag forward: it is left untouched when the pushed tag is not the
