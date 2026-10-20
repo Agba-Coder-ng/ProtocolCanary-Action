@@ -64,9 +64,21 @@ zizmor .github/workflows # security audit of .github/workflows/
 measurement enabled (via `@vitest/coverage-v8`; configured in
 `vitest.config.ts` to measure `src/` only). It reports line/branch coverage
 per source file in the terminal, and writes HTML and lcov reports to
-`coverage/` (gitignored). There is no coverage threshold gate today —
-consult the report when touching a file to see whether your change is
-exercised by the suite.
+`coverage/` (gitignored).
+
+CI enforces coverage thresholds on Ubuntu pull requests and main pushes. New
+code must not lower test coverage below these minimums:
+
+- Statements: 91%
+- Branches: 84%
+- Functions: 95%
+- Lines: 91%
+
+These thresholds live in `vitest.config.ts` under `test.coverage.thresholds`
+and are set slightly below current baseline measurements to accommodate
+refactoring while preventing regressions. As test coverage increases across
+the codebase, these thresholds are ratcheted upward. Run `npm run test:coverage`
+locally to verify your changes satisfy the coverage gate.
 
 Unit and integration tests must never require network access or a real
 `stellar-canary` binary: they run against
@@ -227,6 +239,65 @@ exit-code contract:
 3. update the supported-version table in `README.md`;
 4. add a `MOCK_CANARY_SCENARIO` case exercising the new behavior in
    `tests/fixtures/mock-canary.cjs` before wiring the Action to it.
+
+## Running real-engine compatibility tests
+
+The compatibility workflow (`.github/workflows/engine-compat.yml`) tests the
+Action against real builds of `Protocol-Canary` across all supported
+operating systems (`ubuntu-latest`, `windows-latest`, and `macos-latest`).
+Unlike the mock-based integration suite used during standard CI, this workflow
+exercises the actual engine binary, verifying platform-specific behavior such
+as binary naming (`stellar-canary.exe`), path handling, process spawning, and
+timeouts in `src/runner.ts`.
+
+### Running the workflow manually
+
+The workflow runs on `workflow_dispatch` (manual trigger) and is not part of
+required pull request checks because compiling the engine from source across
+all platforms is resource-intensive.
+
+To trigger the workflow manually:
+
+1. **Via the GitHub web interface:** navigate to **Actions** &rarr;
+   **Engine compatibility**, click **Run workflow**, choose the branch, and
+   provide:
+   - `engine_ref`: the Protocol-Canary tag, branch, or commit to test
+     (for example `v0.2.0` or `main`).
+   - `legacy_ref`: an older Protocol-Canary release (e.g. `v0.1.1`) to ensure
+     backward compatibility.
+2. **Via the GitHub CLI:**
+   ```bash
+   gh workflow run engine-compat.yml -f engine_ref=v0.2.0 -f legacy_ref=v0.1.1
+   ```
+
+To run `tests/integration/real-engine.test.ts` locally, point
+`STELLAR_CANARY_BIN` (and optionally `STELLAR_CANARY_LEGACY_BIN`) to compiled
+engine binaries. When these environment variables are absent, the test suite
+skips cleanly with an informative message rather than failing, keeping
+`npm test` fast for routine local development.
+
+### Understanding platform-specific failures
+
+The matrix is configured with `fail-fast: false`, ensuring a failure on one
+operating system does not cancel execution on the others.
+
+When a compatibility test fails on a specific platform (e.g., Windows or
+macOS) while passing on Linux, it points to platform-specific code in the
+Action rather than an engine logic defect:
+
+- **Executable name and resolution:** Windows binaries require the `.exe`
+  extension (`stellar-canary.exe`). If the binary lookup fails on Windows,
+  verify `binaryName()` in `src/canary.ts` and path resolution logic.
+- **Path separators and argument escaping:** Windows uses backslashes (`\`)
+  and drive letters (`C:\...`), while POSIX platforms use forward slashes (`/`).
+  Arguments passed to `child_process.spawn` must never assume POSIX path
+  conventions or shell expansion.
+- **Line endings:** Outputs and summaries generated on Windows runners can use
+  CRLF (`\r\n`) line endings. Any parsing logic must handle both CRLF and LF.
+- **Process spawning and signal forwarding:** Windows does not support POSIX
+  process signals like `SIGTERM` or `SIGINT` in the same manner as Unix.
+  Timeout handling and process termination in `src/runner.ts` must account for
+  these differences.
 
 ## Pinning the fixtures pack (weekly live workflow)
 
