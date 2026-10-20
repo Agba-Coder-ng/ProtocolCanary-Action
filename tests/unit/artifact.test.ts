@@ -108,6 +108,13 @@ describe("uploadReport", () => {
     expect(outcome.uploaded).toBe(false);
     expect(uploadArtifactMock).toHaveBeenCalledTimes(2);
   });
+
+  it("handles a non-Error failure reason when upload fails", async () => {
+    uploadArtifactMock.mockRejectedValue("string-rejection-reason");
+    const outcome = await uploadReport(REPORT_PATH, "protocol-28");
+    expect(outcome).toEqual({ uploaded: false, reason: "string-rejection-reason" });
+    expect(uploadArtifactMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("fallbackArtifactName", () => {
@@ -134,6 +141,30 @@ describe("isArtifactNameCollision", () => {
     expect(isArtifactNameCollision(conflictError())).toBe(true);
     expect(isArtifactNameCollision(new Error("service unavailable"))).toBe(false);
     expect(isArtifactNameCollision(new Error("File /tmp/report.json does not exist"))).toBe(false);
+  });
+
+  it("recognizes collisions across Error, string, and object inputs", () => {
+    // Error instances
+    expect(isArtifactNameCollision(new Error("Failed request: (409)"))).toBe(true);
+    expect(isArtifactNameCollision(new Error("Upload conflict detected"))).toBe(true);
+    expect(isArtifactNameCollision(new Error("an artifact with this name already exists"))).toBe(true);
+    expect(isArtifactNameCollision(new Error("something already exists on disk"))).toBe(false);
+    expect(isArtifactNameCollision(new Error("artifact upload timed out"))).toBe(false);
+    expect(isArtifactNameCollision(new Error("unrelated error"))).toBe(false);
+
+    // String error values
+    expect(isArtifactNameCollision("Received HTTP (409)")).toBe(true);
+    expect(isArtifactNameCollision("Conflict: name already registered")).toBe(true);
+    expect(isArtifactNameCollision("an artifact already exists in this run")).toBe(true);
+    expect(isArtifactNameCollision("file already exists")).toBe(false);
+    expect(isArtifactNameCollision("arbitrary string error")).toBe(false);
+
+    // Object values with toString representation
+    expect(isArtifactNameCollision({ toString: () => "status: (409) Conflict" })).toBe(true);
+    expect(isArtifactNameCollision({ toString: () => "Error: Conflict occurred" })).toBe(true);
+    expect(isArtifactNameCollision({ toString: () => "an artifact with this name already exists" })).toBe(true);
+    expect(isArtifactNameCollision({ toString: () => "plain object without collision info" })).toBe(false);
+    expect(isArtifactNameCollision({})).toBe(false);
   });
 });
 
@@ -203,6 +234,12 @@ describe("uploadReceipt", () => {
     uploadArtifactMock.mockRejectedValue(conflictError());
     const outcome = await uploadReceipt(RECEIPT_PATH);
     expect(outcome.uploaded).toBe(false);
+  });
+
+  it("handles a non-Error failure reason when receipt upload fails", async () => {
+    uploadArtifactMock.mockRejectedValue("string-receipt-rejection");
+    const outcome = await uploadReceipt(RECEIPT_PATH);
+    expect(outcome).toEqual({ uploaded: false, reason: "string-receipt-rejection" });
   });
 });
 
