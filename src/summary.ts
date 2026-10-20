@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 
 import { SummaryPublishFailedError } from "./errors";
 import { countReplayed } from "./output";
-import { codeSpan, escapeInline, fencedBlock } from "./markdown";
+import { codeSpan, escapeInline, fencedBlock, maskRpcUrl, quoteForShell } from "./markdown";
 import type { CanaryReport, OverallStatus, Surface } from "./output";
 
 const SURFACE_HEADINGS: Readonly<Record<Surface, string>> = {
@@ -204,7 +204,7 @@ function renderReproductionCommand(args: readonly string[], engineVersion?: stri
   lines.push("<details><summary>Reproduction command</summary>", "");
 
   if (engineVersion !== undefined) {
-    lines.push(`Engine version: ${escapeInline(engineVersion)}`, "");
+    lines.push(`Engine version: ${codeSpan(engineVersion)}`, "");
   }
 
   // Build the command string with POSIX shell quoting
@@ -240,73 +240,6 @@ function buildCommandString(args: readonly string[]): string {
   }
 
   return parts.join(" ");
-}
-
-/**
- * Quotes a string for safe use in a POSIX shell command.
- *
- * Uses single quotes (which preserve literal content) and handles embedded
- * single quotes by closing the quote, adding an escaped single quote, and
- * reopening the quote: 'foo'\''bar'.
- */
-function quoteForShell(arg: string): string {
-  // If the argument contains no special characters, leave it unquoted
-  if (/^[A-Za-z0-9_./@:-]+$/.test(arg)) {
-    return arg;
-  }
-  // Otherwise, wrap in single quotes and escape any embedded single quotes
-  return "'" + arg.replace(/'/g, "'\\''") + "'";
-}
-
-/**
- * Masks an RPC URL if it contains userinfo, query string, or fragment.
- * Uses the same logic as src/redact.ts to identify and mask credentials.
- */
-function maskRpcUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    // Check if there's userinfo, query, or fragment to mask
-    const hasUserinfo = parsed.username !== "" || parsed.password !== "";
-    const hasQuery = parsed.search !== "";
-    const hasFragment = parsed.hash !== "";
-
-    if (!hasUserinfo && !hasQuery && !hasFragment) {
-      return url; // No sensitive parts to mask
-    }
-
-    // Reconstruct URL with masked sensitive parts
-    const schemeEnd = url.indexOf("://") + 3;
-    if (schemeEnd === 3) {
-      return url; // Not a valid URL format, return as-is
-    }
-
-    const remainder = url.slice(schemeEnd);
-    const queryStart = remainder.indexOf("?");
-    const fragmentStart = remainder.indexOf("#");
-    const suffixStart = Math.min(
-      queryStart !== -1 ? queryStart : Infinity,
-      fragmentStart !== -1 ? fragmentStart : Infinity,
-    );
-    const beforeSuffix = suffixStart === Infinity ? remainder : remainder.slice(0, suffixStart);
-    const hasSuffix = suffixStart !== Infinity;
-
-    const pathStart = beforeSuffix.indexOf("/");
-    const authorityEnd = pathStart === -1 ? beforeSuffix.length : pathStart;
-    const authority = beforeSuffix.slice(0, authorityEnd);
-    const path = beforeSuffix.slice(authorityEnd);
-
-    // Mask userinfo in authority (user:pass@host -> [REDACTED]@host)
-    const at = authority.lastIndexOf("@");
-    const safeAuthority = at === -1 ? authority : `[REDACTED]@${authority.slice(at + 1)}`;
-
-    // Mask query and fragment
-    const safeSuffix = hasSuffix ? `[REDACTED]` : "";
-
-    return `${url.slice(0, schemeEnd)}${safeAuthority}${path}${safeSuffix}`;
-  } catch {
-    // If URL parsing fails, return the original (will be quoted by quoteForShell)
-    return url;
-  }
 }
 
 /**

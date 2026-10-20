@@ -58,16 +58,19 @@ export function escapeInline(text: string): string {
   }
   // Collapse newlines and tabs to spaces
   let escaped = text.replace(/[\n\t\r]+/g, " ");
-  // Backslash-escape Markdown special characters
-  escaped = escaped.replace(INLINE_SPECIAL, "\\$&");
-  // Neutralise autolinks by inserting zero-width space after first char
+  // Neutralise autolinks by inserting a zero-width space after the first
+  // character. This runs before escaping: escaping would otherwise insert
+  // backslashes into patterns (e.g. before the dot in an email address or
+  // the hash of an issue reference), making the autolink rules unable to
+  // recognise — and therefore neutralise — them.
   // Order matters: URLs first, then www, then email, then @mention, then #issue
   escaped = escaped.replace(AUTOLINK_URL, (m) => m[0] + "\u200B" + m.slice(1));
   escaped = escaped.replace(AUTOLINK_WWW, (m) => m[0] + "\u200B" + m.slice(1));
   escaped = escaped.replace(AUTOLINK_EMAIL, (m) => m[0] + "\u200B" + m.slice(1));
   escaped = escaped.replace(AUTOLINK_MENTION, (m) => m[0] + "\u200B" + m.slice(1));
   escaped = escaped.replace(AUTOLINK_ISSUE, (m) => m[0] + "\u200B" + m.slice(1));
-  return escaped;
+  // Backslash-escape Markdown special characters
+  return escaped.replace(INLINE_SPECIAL, "\\$&");
 }
 
 /**
@@ -127,4 +130,72 @@ export function fencedBlock(text: string): string {
   const content = needsNewlines ? `\n${text}\n` : text;
 
   return `${fence}text\n${content}\n${fence}`;
+}
+
+/**
+ * Quotes a string for safe use in a POSIX shell command (issue #416).
+ *
+ * Uses single quotes, which preserve literal content, and handles embedded
+ * single quotes by closing the quote, adding an escaped single quote, and
+ * reopening it: `foo'\''bar`. Arguments containing only characters with no
+ * special meaning are left unquoted for readability.
+ */
+export function quoteForShell(arg: string): string {
+  // If the argument contains no special characters, leave it unquoted
+  if (/^[A-Za-z0-9_./@:-]+$/.test(arg)) {
+    return arg;
+  }
+  // Otherwise, wrap in single quotes and escape any embedded single quotes
+  return "'" + arg.replace(/'/g, "'\\''") + "'";
+}
+
+/**
+ * Masks an RPC URL that contains userinfo, a query string, or a fragment
+ * (issue #416), using the same sensitive-part classification as
+ * `src/redact.ts`. The scheme, host, and path are preserved so the command
+ * stays reproducible; only the potentially secret parts are replaced.
+ */
+export function maskRpcUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const hasUserinfo = parsed.username !== "" || parsed.password !== "";
+    const hasQuery = parsed.search !== "";
+    const hasFragment = parsed.hash !== "";
+
+    if (!hasUserinfo && !hasQuery && !hasFragment) {
+      return url; // No sensitive parts to mask
+    }
+
+    const schemeEnd = url.indexOf("://") + 3;
+    if (schemeEnd === 3) {
+      return url; // Not a valid URL format, return as-is
+    }
+
+    const remainder = url.slice(schemeEnd);
+    const queryStart = remainder.indexOf("?");
+    const fragmentStart = remainder.indexOf("#");
+    const suffixStart = Math.min(
+      queryStart !== -1 ? queryStart : Infinity,
+      fragmentStart !== -1 ? fragmentStart : Infinity,
+    );
+    const beforeSuffix = suffixStart === Infinity ? remainder : remainder.slice(0, suffixStart);
+    const hasSuffix = suffixStart !== Infinity;
+
+    const pathStart = beforeSuffix.indexOf("/");
+    const authorityEnd = pathStart === -1 ? beforeSuffix.length : pathStart;
+    const authority = beforeSuffix.slice(0, authorityEnd);
+    const path = beforeSuffix.slice(authorityEnd);
+
+    // Mask userinfo in authority (user:pass@host -> [REDACTED]@host)
+    const at = authority.lastIndexOf("@");
+    const safeAuthority = at === -1 ? authority : `[REDACTED]@${authority.slice(at + 1)}`;
+
+    // Mask query and fragment
+    const safeSuffix = hasSuffix ? "[REDACTED]" : "";
+
+    return `${url.slice(0, schemeEnd)}${safeAuthority}${path}${safeSuffix}`;
+  } catch {
+    // If URL parsing fails, return the original (quoteForShell will quote it)
+    return url;
+  }
 }

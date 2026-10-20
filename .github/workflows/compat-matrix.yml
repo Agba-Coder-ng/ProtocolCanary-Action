@@ -71,7 +71,7 @@ jobs:
         run: |
           cd engine
           cargo install --locked --path canary-cli --root ~/.cargo
-          echo "binary=~/.cargo/bin/stellar-canary" >> $GITHUB_OUTPUT
+          echo "binary=~/.cargo/bin/stellar-canary" >> "$GITHUB_OUTPUT"
 
       - name: Run compatibility check
         id: canary
@@ -99,14 +99,12 @@ jobs:
           stderr=$(cat "${RUNNER_TEMP}/stderr.txt" 2>/dev/null || echo "")
 
           # Determine status from exit code
-          if [ $exit_code -eq 0 ]; then
+          if [ "$exit_code" -eq 0 ]; then
             status="pass"
-          elif [ $exit_code -eq 1 ]; then
+          elif [ "$exit_code" -eq 1 ]; then
             status="fail"
-          elif [ $exit_code -eq 2 ]; then
+          elif [ "$exit_code" -eq 2 ]; then
             status="error"
-          elif [ $exit_code -eq 3 ]; then
-            status="execution-failed"
           else
             status="execution-failed"
           fi
@@ -132,19 +130,24 @@ jobs:
           first_diagnostic=$(echo "$stderr" | head -n1 | sed 's/|/%7C/g' | sed 's/"/%22/g')
 
           # Output for classification
-          echo "status=$status" >> $GITHUB_OUTPUT
-          echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
-          echo "passed=$passed" >> $GITHUB_OUTPUT
-          echo "failures=$failed" >> $GITHUB_OUTPUT
-          echo "warnings=$warnings" >> $GITHUB_OUTPUT
-          echo "errors=$errors" >> $GITHUB_OUTPUT
-          echo "total=$total" >> $GITHUB_OUTPUT
-          echo "replayed=$replayed" >> $GITHUB_OUTPUT
-          echo "first_diagnostic=$first_diagnostic" >> $GITHUB_OUTPUT
-          echo "ran_no_checks=$([ "$total" -eq 0 ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          {
+            echo "status=$status"
+            echo "exit_code=$exit_code"
+            echo "passed=$passed"
+            echo "failures=$failed"
+            echo "warnings=$warnings"
+            echo "errors=$errors"
+            echo "total=$total"
+            echo "replayed=$replayed"
+            echo "first_diagnostic=$first_diagnostic"
+            echo "ran_no_checks=$([ "$total" -eq 0 ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prepare cell facts
         id: facts
+        env:
+          ENGINE_REF: ${{ matrix.engine-ref }}
+          PACK_REF: ${{ matrix.pack-ref }}
         run: |
           # Determine build outcome
           if [ "${{ steps.build-engine.outcome }}" = "success" ]; then
@@ -158,22 +161,24 @@ jobs:
           fi
 
           # If build failed, canary step won't have run
-          if [ "$build_outcome" != "success" ]; then
-            echo "status=" >> $GITHUB_OUTPUT
-            echo "passed=0" >> $GITHUB_OUTPUT
-            echo "failures=0" >> $GITHUB_OUTPUT
-            echo "warnings=0" >> $GITHUB_OUTPUT
-            echo "errors=0" >> $GITHUB_OUTPUT
-            echo "total=0" >> $GITHUB_OUTPUT
-            echo "first_diagnostic=" >> $GITHUB_OUTPUT
-            echo "ran_no_checks=true" >> $GITHUB_OUTPUT
-          fi
+          {
+            if [ "$build_outcome" != "success" ]; then
+              echo "status="
+              echo "passed=0"
+              echo "failures=0"
+              echo "warnings=0"
+              echo "errors=0"
+              echo "total=0"
+              echo "first_diagnostic="
+              echo "ran_no_checks=true"
+            fi
 
-          echo "engine_ref=${{ matrix.engine-ref }}" >> $GITHUB_OUTPUT
-          echo "pack_ref=${{ matrix.pack-ref }}" >> $GITHUB_OUTPUT
-          echo "action_commit=${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" >> $GITHUB_OUTPUT
-          echo "build_outcome=$build_outcome" >> $GITHUB_OUTPUT
+            echo "engine_ref=$ENGINE_REF"
+            echo "pack_ref=$PACK_REF"
+            echo "action_commit=${{ github.sha }}"
+            echo "run_url=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo "build_outcome=$build_outcome"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload cell facts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -210,7 +215,7 @@ jobs:
           else
             echo "[]"
           fi > expectations.json
-          echo "expectations=$(cat expectations.json | jq -c .)" >> $GITHUB_OUTPUT
+          echo "expectations=$(jq -c . expectations.json)" >> "$GITHUB_OUTPUT"
 
       - name: Classify cells
         id: classify
@@ -256,8 +261,10 @@ jobs:
           EXPECTATIONS: ${{ steps.expectations.outputs.expectations }}
 
       - name: Print classification table
+        env:
+          TABLE: ${{ steps.classify.outputs.TABLE }}
         run: |
-          echo "${{ steps.classify.outputs.TABLE }}" >> $GITHUB_STEP_SUMMARY
+          echo "$TABLE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload classification results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
