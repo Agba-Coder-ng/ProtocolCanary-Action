@@ -242,6 +242,9 @@ describe("tamper detection and spoofed redirects (issue #375)", () => {
     // binary on disk is a truncated remnant of it.
     const full = "full-canary-payload";
     httpsGetMock
+      // No prebuilt release asset for this platform: the install falls through
+      // to the `cargo install` path under test.
+      .mockImplementationOnce(respond(404, ""))
       .mockImplementationOnce(
         respond(
           200,
