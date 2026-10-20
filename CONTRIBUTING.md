@@ -64,9 +64,21 @@ zizmor .github/workflows # security audit of .github/workflows/
 measurement enabled (via `@vitest/coverage-v8`; configured in
 `vitest.config.ts` to measure `src/` only). It reports line/branch coverage
 per source file in the terminal, and writes HTML and lcov reports to
-`coverage/` (gitignored). There is no coverage threshold gate today —
-consult the report when touching a file to see whether your change is
-exercised by the suite.
+`coverage/` (gitignored).
+
+CI enforces coverage thresholds on Ubuntu pull requests and main pushes. New
+code must not lower test coverage below these minimums:
+
+- Statements: 91%
+- Branches: 84%
+- Functions: 95%
+- Lines: 91%
+
+These thresholds live in `vitest.config.ts` under `test.coverage.thresholds`
+and are set slightly below current baseline measurements to accommodate
+refactoring while preventing regressions. As test coverage increases across
+the codebase, these thresholds are ratcheted upward. Run `npm run test:coverage`
+locally to verify your changes satisfy the coverage gate.
 
 Unit and integration tests must never require network access or a real
 `stellar-canary` binary: they run against
