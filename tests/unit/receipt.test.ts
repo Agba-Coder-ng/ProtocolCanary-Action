@@ -129,6 +129,81 @@ describe("serializeReceipt (#360)", () => {
   });
 });
 
+describe("serializeReceipt contract pinning (#365)", () => {
+  /**
+   * These tests pin the *documented* serialization contract for inputs the
+   * producer never emits (`buildReceipt` always yields `receiptVersion: 1`
+   * with string-typed string fields). Receipts also arrive as parsed JSON
+   * from older or hand-edited artifacts, and "unvalidated but fully
+   * deterministic" is the contract consumers rely on — the verification
+   * half lives in the consumer (`scripts/verify-receipt.ts`, #363), not in
+   * the serializer. Pinning the behaviour here makes any future change a
+   * deliberate one.
+   */
+  it("emits a foreign receiptVersion verbatim rather than validating it", () => {
+    const future = { ...buildReceipt(report(), TS), receiptVersion: 7 } as unknown as Parameters<typeof serializeReceipt>[0];
+    const json = serializeReceipt(future);
+    expect(JSON.parse(json).receiptVersion).toBe(7);
+  });
+
+  it("drops keys the receipt model does not define", () => {
+    const withExtra = {
+      ...buildReceipt(report(), TS),
+      signature: "ed25519:abcdef",
+      note: "receipts are unsigned",
+    } as unknown as Parameters<typeof serializeReceipt>[0];
+    const parsed = JSON.parse(serializeReceipt(withExtra)) as Record<string, unknown>;
+    expect(Object.keys(parsed)).toEqual([
+      "receiptVersion",
+      "engineVersion",
+      "engineCommit",
+      "packDigest",
+      "protocol",
+      "observedProtocol",
+      "timestamp",
+    ]);
+    expect(parsed.signature).toBeUndefined();
+  });
+
+  it("is exactly two-space indented JSON with no trailing newline", () => {
+    const json = serializeReceipt(buildReceipt(report(), TS));
+    expect(json).toBe(
+      JSON.stringify(
+        {
+          receiptVersion: 1,
+          engineVersion: "0.1.0",
+          engineCommit: "unknown",
+          packDigest: "unknown",
+          protocol: 28,
+          observedProtocol: "unknown",
+          timestamp: TS,
+        },
+        null,
+        2,
+      ),
+    );
+    expect(json.endsWith("}")).toBe(true);
+    expect(json).toContain('\n  "engineVersion"');
+  });
+
+  it("keeps recorded protocol fields as JSON numbers, unscrubbed", () => {
+    const receipt = buildReceipt(report({ network: { name: "testnet", observedProtocol: 29 } }), TS);
+    const parsed = JSON.parse(serializeReceipt(receipt)) as Record<string, unknown>;
+    expect(parsed.protocol).toBe(28);
+    expect(typeof parsed.protocol).toBe("number");
+    expect(parsed.observedProtocol).toBe(29);
+    expect(typeof parsed.observedProtocol).toBe("number");
+  });
+
+  it("throws a TypeError on a hand-constructed non-string in a string field — a programmer error, not a silent coercion", () => {
+    // buildReceipt never produces such a receipt (the fields are `string` by
+    // construction); this pins that a caller bypassing the type cannot get a
+    // silently coerced value into the artifact bytes.
+    const bad = { ...buildReceipt(report(), TS), timestamp: 42 } as unknown as Parameters<typeof serializeReceipt>[0];
+    expect(() => serializeReceipt(bad)).toThrow(TypeError);
+  });
+});
+
 describe("receipt redaction boundary (#364)", () => {
   /** A syntactically valid classic PAT shape (ghp_ + 36+ alphanumerics). */
   const SYNTHETIC_TOKEN = `ghp_${"Ab3dEf6hIjKlMn0pQr2sTuVwXyZ012345678".slice(0, 36)}`;
