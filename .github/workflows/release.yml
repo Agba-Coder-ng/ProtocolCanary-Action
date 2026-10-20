@@ -14,9 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
+        # zizmor: ignore[artipacked] release job must push floating major tag with repository credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
+        # zizmor: ignore[cache-poisoning] release workflow runs only on trusted maintainer pushed tags
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
@@ -45,6 +47,7 @@ jobs:
           fi
 
       - name: Create GitHub Release
+        # zizmor: ignore[superfluous-actions] action-gh-release handles asset uploads and automatic release notes cleanly
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           generate_release_notes: true
