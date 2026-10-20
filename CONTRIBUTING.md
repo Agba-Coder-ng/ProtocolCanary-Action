@@ -53,18 +53,32 @@ repository, is the source of truth for the CLI's behavior.
 ```bash
 npm run typecheck    # tsc --noEmit, strict mode
 npm run lint         # eslint
-npm test             # vitest run (unit + integration)
+npm test             # vitest run (unit + integration, includes workflow-policy.test.ts)
 npm run test:coverage  # vitest run with v8 coverage over src/ (text, HTML, and lcov reports in coverage/)
 npm run build         # esbuild bundle to dist/index.js
+actionlint           # static analysis of .github/workflows/
+zizmor .github/workflows # security audit of .github/workflows/
 ```
 
 `npm run test:coverage` runs the same suite as `npm test` with coverage
 measurement enabled (via `@vitest/coverage-v8`; configured in
 `vitest.config.ts` to measure `src/` only). It reports line/branch coverage
 per source file in the terminal, and writes HTML and lcov reports to
-`coverage/` (gitignored). There is no coverage threshold gate today —
-consult the report when touching a file to see whether your change is
-exercised by the suite.
+`coverage/` (gitignored).
+
+CI enforces coverage thresholds on Ubuntu pull requests and main pushes. New
+code must not lower test coverage below these minimums:
+
+- Statements: 91%
+- Branches: 84%
+- Functions: 95%
+- Lines: 91%
+
+These thresholds live in `vitest.config.ts` under `test.coverage.thresholds`
+and are set slightly below current baseline measurements to accommodate
+refactoring while preventing regressions. As test coverage increases across
+the codebase, these thresholds are ratcheted upward. Run `npm run test:coverage`
+locally to verify your changes satisfy the coverage gate.
 
 Unit and integration tests must never require network access or a real
 `stellar-canary` binary: they run against
@@ -150,6 +164,39 @@ settings.
 - Prefer the typed `CanaryActionError` subclasses in `src/errors.ts` over
   throwing a plain `Error`, so a caller can distinguish, for example, an
   installation failure from an invalid report.
+- Workflow files in `.github/workflows/` must follow repository security policy:
+  every workflow must explicitly declare a top-level `permissions:` block
+  (least privilege), and every external `uses:` action reference must be pinned
+  to a full 40-character commit SHA (with the single documented exception of the
+  reusable workflow calling the action's own `@v1` release tag).
+
+## Workflow linting and security checks
+
+Workflow files are analyzed in CI using `actionlint` and `zizmor`, as well as
+the vitest suite `tests/unit/workflow-policy.test.ts`.
+
+To run these checks locally:
+
+1. **Policy unit tests**:
+   ```bash
+   npm test
+   # or run the policy test specifically:
+   npx vitest run tests/unit/workflow-policy.test.ts
+   ```
+2. **actionlint** (checks syntax, expression schemas, and runner compatibility):
+   ```bash
+   actionlint .github/workflows/*.yml
+   ```
+   (Install via `go install github.com/rhysd/actionlint/cmd/actionlint@latest` or package manager).
+3. **zizmor** (checks for credential persistence, injection risks, and unpinned actions):
+   ```bash
+   zizmor .github/workflows
+   ```
+   (Install via `pip install zizmor` or `cargo install zizmor`).
+
+Prefer fixing findings directly over suppressing them. Any necessary suppression
+must include an explicit `# zizmor: ignore[rule-name]` comment with a clear,
+justified explanation on the affected line.
 
 ## Commit style
 
