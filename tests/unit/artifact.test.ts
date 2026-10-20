@@ -8,7 +8,7 @@ vi.mock("@actions/artifact", () => ({
   },
 }));
 
-import { ARTIFACT_NAME, RECEIPT_ARTIFACT_PREFIX, fallbackArtifactName, isArtifactNameCollision, uploadReceipt, uploadReport } from "../../src/artifact";
+import { ARTIFACT_NAME, RECEIPT_ARTIFACT_PREFIX, fallbackArtifactName, isArtifactNameCollision, receiptArtifactName, uploadReceipt, uploadReport } from "../../src/artifact";
 
 const REPORT_PATH = "/tmp/stellar-canary-report.json";
 const REPORT_DIR = "/tmp";
@@ -240,6 +240,34 @@ describe("uploadReceipt", () => {
     uploadArtifactMock.mockRejectedValue("string-receipt-rejection");
     const outcome = await uploadReceipt(RECEIPT_PATH);
     expect(outcome).toEqual({ uploaded: false, reason: "string-receipt-rejection" });
+  });
+});
+
+describe("receiptArtifactName (#365)", () => {
+  it("embeds a well-formed run id verbatim", () => {
+    expect(receiptArtifactName("4321")).toBe(`${RECEIPT_ARTIFACT_PREFIX}-4321`);
+  });
+
+  it("is deterministic for the same id (a retried step addresses one artifact name)", () => {
+    expect(receiptArtifactName("4321")).toBe(receiptArtifactName("4321"));
+    expect(receiptArtifactName("feat/363 canary!")).toBe(receiptArtifactName("feat/363 canary!"));
+  });
+
+  it("collapses awkward run ids through the same sanitizer as the report differentiator", () => {
+    expect(receiptArtifactName("feat/363 canary!")).toBe(`${RECEIPT_ARTIFACT_PREFIX}-feat-363-canary`);
+    expect(receiptArtifactName("protocol.28_v2")).toBe(`${RECEIPT_ARTIFACT_PREFIX}-protocol.28_v2`);
+  });
+
+  it("falls back to a short unique suffix when the id is absent, empty, or blank", () => {
+    for (const id of [undefined, "", "   "]) {
+      const name = receiptArtifactName(id);
+      expect(name).toMatch(new RegExp(`^${RECEIPT_ARTIFACT_PREFIX}-[a-z0-9]+(-[a-z0-9]+)?$`));
+      expect(name).not.toBe(RECEIPT_ARTIFACT_PREFIX);
+    }
+  });
+
+  it("trims a padded run id to its documented name", () => {
+    expect(receiptArtifactName("  4321  ")).toBe(`${RECEIPT_ARTIFACT_PREFIX}-4321`);
   });
 });
 
