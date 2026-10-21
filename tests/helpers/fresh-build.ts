@@ -41,7 +41,10 @@ export function freshBuild(options: { srcDir?: string } = {}): FreshBuildResult 
     fs.cpSync(path.join(repoRoot, "scripts"), path.join(tmpDir, "scripts"), { recursive: true });
     fs.cpSync(path.join(repoRoot, "package.json"), path.join(tmpDir, "package.json"));
     fs.cpSync(path.join(repoRoot, "tsconfig.json"), path.join(tmpDir, "tsconfig.json"));
-    fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(tmpDir, "node_modules"), "dir");
+    fs.cpSync(path.join(repoRoot, "node_modules"), path.join(tmpDir, "node_modules"), {
+      recursive: true,
+      dereference: false,
+    });
 
     const bundlePath = path.join(tmpDir, "dist", "index.js");
     const mapPath = path.join(tmpDir, "dist", "index.js.map");
@@ -50,6 +53,7 @@ export function freshBuild(options: { srcDir?: string } = {}): FreshBuildResult 
       execFileSync(process.execPath, [path.join(tmpDir, "scripts", "build.mjs")], {
         cwd: tmpDir,
         encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
         maxBuffer: 50 * 1024 * 1024,
         timeout: 120_000,
       });
