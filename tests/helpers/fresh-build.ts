@@ -41,10 +41,7 @@ export function freshBuild(options: { srcDir?: string } = {}): FreshBuildResult 
     fs.cpSync(path.join(repoRoot, "scripts"), path.join(tmpDir, "scripts"), { recursive: true });
     fs.cpSync(path.join(repoRoot, "package.json"), path.join(tmpDir, "package.json"));
     fs.cpSync(path.join(repoRoot, "tsconfig.json"), path.join(tmpDir, "tsconfig.json"));
-    fs.cpSync(path.join(repoRoot, "node_modules"), path.join(tmpDir, "node_modules"), {
-      recursive: true,
-      dereference: false,
-    });
+    fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(tmpDir, "node_modules"), "junction");
 
     const bundlePath = path.join(tmpDir, "dist", "index.js");
     const mapPath = path.join(tmpDir, "dist", "index.js.map");
