@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -25,6 +27,7 @@ jobs:
         run: npm ci
 
       - name: Install the Stryker Vitest runner (pinned, not saved to package.json/package-lock.json)
+        # zizmor: ignore[adhoc-packages] Stryker packages are intentionally pinned here and excluded from package.json/package-lock.json per #443
         run: npm install --no-save @stryker-mutator/vitest-runner@7.7.4
 
       - name: Run StrykerJS mutation testing
@@ -56,20 +59,20 @@ jobs:
                 totalMutants += mutants.length;
                 totalKilled += killed;
                 const score = mutants.length ? ((killed / mutants.length) * 100).toFixed(1) : "n/a";
-                lines.push(`## ${file}`);
-                lines.push(`- mutants: ${mutants.length} \u00b7 killed: ${killed} \u00b7 survived: ${survived.length} \u00b7 score: ${score}%`);
+                lines.push("## " + file);
+                lines.push("- mutants: " + mutants.length + " \u00b7 killed: " + killed + " \u00b7 survived: " + survived.length + " \u00b7 score: " + score + "%");
                 for (const m of survived) {
                   const loc = m.location && m.location.start && m.location.start.line ? m.location.start.line : "?";
-                  survivors.push(`${file}:${loc} \u00b7 ${m.mutatorName || "?"} \u00b7 ${m.description || ""}`);
+                  survivors.push(file + ":" + loc + " \u00b7 " + (m.mutatorName || "?") + " \u00b7 " + (m.description || ""));
                 }
               }
               lines.push("");
-              lines.push(`**Overall mutation score:** ${totalKilled}/${totalMutants} mutants killed`);
+              lines.push("**Overall mutation score:** " + totalKilled + "/" + totalMutants + " mutants killed");
               if (survivors.length) {
                 lines.push("");
                 lines.push("## Top surviving mutants");
                 for (const s of survivors.slice(0, 10)) {
-                  lines.push(`- ${s}`);
+                  lines.push("- " + s);
                 }
               } else {
                 lines.push("");
