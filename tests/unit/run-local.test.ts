@@ -80,6 +80,12 @@ function listTemp(): string[] {
   return fs.readdirSync(os.tmpdir()).filter((entry) => entry.startsWith("canary-run-local-"));
 }
 
+// The process-level scenarios drive the built Action against the mock engine,
+// which cannot run as `stellar-canary.exe` on Windows (same reason
+// end-to-end.test.ts is skipIf(win32)); they also need a built dist/.
+// Evaluated at collection time, before the negative suite moves dist/.
+const skipProcessScenarios = process.platform === "win32" || !fs.existsSync(DIST);
+
 describe("scripts/run-local.mjs (local runner script)", () => {
   let tmpDir: string;
 
@@ -126,10 +132,7 @@ describe("scripts/run-local.mjs (local runner script)", () => {
     expect(listTemp()).toEqual(before);
   });
 
-  it("pass: prints status=pass, the summary, and exits 0", async function runPass(this: { skip(): void }) {
-    if (process.platform === "win32" || !fs.existsSync(DIST)) {
-      this.skip();
-    }
+  it.skipIf(skipProcessScenarios)("pass: prints status=pass, the summary, and exits 0", async () => {
     const before = listTemp();
     const result = await runScript([...commonActionArgs(tmpDir)], { env: { MOCK_CANARY_SCENARIO: "pass" } });
 
@@ -143,10 +146,7 @@ describe("scripts/run-local.mjs (local runner script)", () => {
     expect(listTemp()).toEqual(before);
   }, 60_000);
 
-  it("fail: exits with the Action's non-zero status and prints the annotations", async function runFail(this: { skip(): void }) {
-    if (process.platform === "win32" || !fs.existsSync(DIST)) {
-      this.skip();
-    }
+  it.skipIf(skipProcessScenarios)("fail: exits with the Action's non-zero status and prints the annotations", async () => {
     const before = listTemp();
     const result = await runScript([...commonActionArgs(tmpDir)], { env: { MOCK_CANARY_SCENARIO: "fail" } });
 
@@ -214,10 +214,7 @@ describe("scripts/run-local.mjs negative cases", () => {
     expect(result.stderr).toContain("--help");
   });
 
-  it("an interrupt during the run kills the child, cleans up, and exits non-zero", async function onInterrupt(this: { skip(): void }) {
-    if (process.platform === "win32" || !fs.existsSync(DIST)) {
-      this.skip();
-    }
+  it.skipIf(skipProcessScenarios)("an interrupt during the run kills the child, cleans up, and exits non-zero", async () => {
     const fixturesDir = path.join(tmpDir, "fixtures");
     fs.mkdirSync(fixturesDir, { recursive: true });
     const before = listTemp();

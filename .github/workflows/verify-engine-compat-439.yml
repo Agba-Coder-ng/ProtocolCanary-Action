@@ -44,6 +44,8 @@ jobs:
     steps:
       - name: Checkout Action
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -91,6 +93,8 @@ jobs:
     steps:
       - name: Checkout Action (this branch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -160,7 +164,7 @@ jobs:
       # (issue #439 step 2, the "install through cargo install ... --tag"
       # verification engine-compat.yml cannot provide).
       - name: Run Stellar Protocol Canary (this Action, from this branch)
-        uses: ./
+        uses: ./ # zizmor: ignore[self-repository] root composite action executed from source within this repository
         with:
           version: ${{ matrix.version }}
           protocol: "28"

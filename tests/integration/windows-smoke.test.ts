@@ -54,6 +54,14 @@ vi.mock("node:https", () => ({
 const HOOK_PATH = path.join(__dirname, "..", "fixtures", "mock-canary-hook.cjs");
 const ENGINE_VERSION = "0.1.0";
 
+// NODE_OPTIONS is parsed by Node itself (not the shell), and its tokenizer
+// treats `\` inside a quoted value as an escape: a Windows path would reach
+// the preloader with every separator stripped. Forward slashes are valid
+// Windows path separators and survive the tokenizer on every platform.
+function toNodeOptionsPath(filePath: string): string {
+  return filePath.replaceAll("\\", "/");
+}
+
 const ENV_KEYS = [
   "CARGO_HOME",
   "RUNNER_TEMP",
@@ -116,10 +124,13 @@ function setUp(scenario: string, options: { cargoHomeName?: string } = {}): Scen
   process.env.INPUT_ANNOTATIONS = "true";
   process.env["INPUT_TIMEOUT-MINUTES"] = "1";
   // The mock engine does not care about fixtures-dir, but the preload hook
-  // is REQUIRED for the copied Node to behave like stellar-canary; quote the
+  // is REQUIRED for the copied Node to behave like stellar-canary. Quote the
   // path so spaces in it (e.g. the spaceful CARGO_HOME nearby) cannot break
-  // Node's own option parsing.
-  process.env.NODE_OPTIONS = `--require "${HOOK_PATH}"`;
+  // Node's own option parsing — but use forward slashes first: Node's
+  // NODE_OPTIONS tokenizer swallows backslashes inside quotes, so a quoted
+  // `C:\\path\\to\\hook.cjs` arrives as `C:pathtohook.cjs` and the preload
+  // silently fails (observed on windows-latest). Node accepts `/` on Windows.
+  process.env.NODE_OPTIONS = `--require "${toNodeOptionsPath(HOOK_PATH)}"`;
   // Make cargo unfindable: with the exact-version binary already in
   // CARGO_HOME/bin, ensureCanaryInstalled must short-circuit to it and never
   // attempt an install. If some code path ever reached for cargo here, the
@@ -139,7 +150,9 @@ function setUp(scenario: string, options: { cargoHomeName?: string } = {}): Scen
 function readOutputs(outputPath: string): Record<string, string> {
   const content = fs.readFileSync(outputPath, "utf8");
   const outputs: Record<string, string> = {};
-  const lines = content.split("\n");
+  // @actions/core terminates file-command lines with os.EOL, so on Windows
+  // every name and delimiter carries a trailing `\r`; split on either form.
+  const lines = content.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$/.exec(lines[i] ?? "");
     if (match) {
@@ -257,7 +270,7 @@ describe("Action against the Node-copy mock engine (Windows spawn path)", () => 
 
   it("a preload hook that cannot be found fails the run with a clear message (no hang)", async () => {
     scenario = setUp("pass");
-    process.env.NODE_OPTIONS = `--require "${path.join(scenario.workDir, "no-such-hook.cjs")}"`;
+    process.env.NODE_OPTIONS = `--require "${toNodeOptionsPath(path.join(scenario.workDir, "no-such-hook.cjs"))}"`;
     const { run } = await import("../../src/main");
     await run();
 
